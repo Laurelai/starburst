@@ -1,0 +1,64 @@
+#!/usr/bin/perl -w
+package command::plugin;
+use strict;
+use CommonRoutines;
+
+BEGIN {
+	$__plugin_name    = 'Command: plugin';
+	$__plugin_version = '1.0';
+	$__plugin_author  = 'ezbake consortium';
+	$__plugin_date    = 'under development';
+};
+
+$__plugin_handle  = command::plugin->new();
+
+sub new {
+       	my $self = shift;
+       	$self = bless({}, $self);
+       	for (my $x = 0; $x < $#_; $x += 2) {
+               	$self->{$_[$x]} = $_[$x+1];
+       	}
+       	return($self);
+}
+
+sub initialize {
+	my ($self) = @_;
+	registry_read('core')->event_insert('CMD_plugin', '^.* PRIVMSG '.registry_read('irc.nickname').' :plugin', \&command_plugin);
+}
+
+sub shutdown {
+	undef(&new);
+	undef(&initialize);
+#	undef(&command_plugin); # we might've been called from here.
+}
+
+sub command_plugin {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	$data      =~ /^:(.*) PRIVMSG .* :plugin(.*)/;
+	my ($nick, $text) = ($1, $2);
+	my ($userid)      = $db->user_nick_to_id($nick);
+	my ($hasflag)     = $db->user_flag($userid, 'plugin');
+	if (!$userid || !$hasflag) {
+		$self->client_notice(1, $nick, 'Insufficient permissions');
+		return;
+	}
+	if ($text =~ /^ list$/i) {
+		my @list = registry_tree_single('plugins.list');
+		foreach my $entry (@list) {
+			$entry =~ s/___/\./g;
+			$self->client_message(1, $nick, $entry);
+		}
+	}
+	if ($text =~ /^ reload (.*)$/i) {
+		plugin_reload($1);
+	}
+	if ($text =~ /^ load (.*)$/i) {
+		plugin_load($1);
+	}
+	if ($text =~ /^ unload (.*)$/i) {
+		plugin_unload($1);
+	}
+}
+1;
+

@@ -1,0 +1,45 @@
+#!/usr/bin/perl -w
+package command::channel;
+use strict;
+use CommonRoutines;
+
+BEGIN {
+	$__plugin_name    = 'Command: CHANNEL';
+	$__plugin_version = '1.0';
+	$__plugin_author  = 'ezbake consortium';
+	$__plugin_date    = 'under development';
+};
+
+$__plugin_handle  = command::channel->new();
+
+sub new {
+       	my $self = shift;
+       	$self = bless({}, $self);
+       	for (my $x = 0; $x < $#_; $x += 2) {
+               	$self->{$_[$x]} = $_[$x+1];
+       	}
+       	return($self);
+}
+
+sub initialize {
+	my ($self) = @_;
+	registry_read('core')->event_insert('CMD_channel', '^.* PRIVMSG '.registry_read('irc.nickname').' :channel', \&command_channel);
+}
+
+sub shutdown {
+	undef(&new);
+	undef(&initialize);
+}
+
+sub command_channel {
+	my ($data)        = @_;
+	my $self          = registry_read('backend.irc.handle');
+	my $botnick       = registry_read('irc.nickname');
+	my $db            = registry_read('backend.db.handle');
+	$data             =~ /^:(.*) PRIVMSG .* :channel(.*)/;
+	my ($nick, $text) = ($1, $2);
+
+}
+
+1;
+

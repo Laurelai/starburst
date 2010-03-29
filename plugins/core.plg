@@ -1,0 +1,99 @@
+#!/usr/bin/perl -w
+package core;
+use strict;
+use CommonRoutines;
+
+BEGIN {
+	$__plugin_name    = 'starburst';
+	$__plugin_version = '2.0';
+	$__plugin_author  = 'ezbake consortium';
+	$__plugin_date    = 'under development';
+};
+
+$__plugin_handle  = core->new();
+
+sub new {
+       	my $self = shift;
+       	$self = bless({}, $self);
+       	for (my $x = 0; $x < $#_; $x += 2) {
+               	$self->{$_[$x]} = $_[$x+1];
+       	}
+       	return($self);
+}
+
+sub initialize {
+	my ($self) = @_;
+	registry_write('core', $self);
+	my $dir;
+	opendir($dir, registry_read('plugins.folder').'commands/');
+	if (!$dir) {
+		debug('Failed to get list of command plugins: '.$!, 0);
+		debug('Starburst will continue to run, but it will be useless!');
+	}
+	while (my $file = readdir($dir)) {
+		next if ($file =~ /^(\.|\.\.)$/); # . and .. aren't plugins
+		$file =~ s/\.plg$//;
+		plugin_load('commands.'.$file);
+	}
+	closedir($dir);
+	plugin_load(registry_read('backend.db'));
+	plugin_load(registry_read('backend.irc'));
+}
+
+sub start {
+	my ($self) = @_;
+	registry_read('backend.db.handle')->start();
+	registry_read('backend.irc.handle')->start();
+	registry_read('backend.irc.handle')->client_new(registry_read('irc.nickname'),
+							registry_read('irc.ident'),
+							registry_read('irc.hostname'),
+							registry_read('irc.realname'));
+	registry_read('backend.irc.handle')->client_join(1, registry_read('irc.channel'));
+}
+
+sub run {
+	my ($self) = @_;
+	my $irc    = registry_read('backend.irc.handle');
+	while (1) {
+		my $buffer = $irc->readraw();
+		debug($buffer, 5);
+		my @events = registry_tree_single('core.events');
+		foreach my $event (@events) {
+			my $regex = registry_read('core.events.'.$event.'.regex');
+			if ($buffer =~ /$regex/i) {
+				debug('Event \''.$event.'\' fired', 3);
+				my $routine  = registry_read('core.events.'.$event.'.routine');
+				my $runcount = registry_read('core.events.'.$event.'.runcount');
+				&$routine($buffer);
+				registry_write('core.events.'.$event.'.runcount', $runcount + 1);
+			}
+		}
+	}
+}
+
+sub shutdown {
+	undef(&new);
+	undef(&initialize);
+	undef(&start);
+	undef(&run);
+	undef(&event_insert);
+	undef(&event_delete);
+}
+
+sub event_insert {
+	my ($self, $event, $regex, $routine) = @_;
+	debug('Creating new event \''.$event.'\'.', 0);
+	debug('Event regex: '.$regex.'  --  Routine '.$routine, 2);
+	registry_write('core.events.'.$event.'.regex',    $regex);
+	registry_write('core.events.'.$event.'.routine',  $routine);
+	registry_write('core.events.'.$event.'.runcount', 0);
+}
+
+sub event_delete {
+	my ($self, $event) = @_;
+	debug('Deleting event \''.$event.'\'.', 0);
+	registry_deletetree('core.events.'.$event);
+}
+
+1;
+

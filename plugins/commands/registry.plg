@@ -1,0 +1,62 @@
+#!/usr/bin/perl -w
+package command::registry;
+use strict;
+use CommonRoutines;
+
+BEGIN {
+	$__plugin_name    = 'Command: registry';
+	$__plugin_version = '1.0';
+	$__plugin_author  = 'ezbake consortium';
+	$__plugin_date    = 'under development';
+};
+
+$__plugin_handle  = command::registry->new();
+
+sub new {
+       	my $self = shift;
+       	$self = bless({}, $self);
+       	for (my $x = 0; $x < $#_; $x += 2) {
+               	$self->{$_[$x]} = $_[$x+1];
+       	}
+       	return($self);
+}
+
+sub initialize {
+	my ($self) = @_;
+	registry_read('core')->event_insert('CMD_registry', '^.* PRIVMSG '.registry_read('irc.nickname').' :registry', \&command_registry);
+}
+
+sub shutdown {
+	undef(&new);
+	undef(&initialize);
+	undef(&command_registry);
+}
+
+sub command_registry {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	my $db     = registry_read('backend.db.handle');
+	$data      =~ /^:(.*) PRIVMSG .* :registry(.*)/;
+	my ($nick, $text) = ($1, $2);
+	my ($userid)      = $db->user_nick_to_id($nick);
+	my ($hasflag)     = $db->user_flag($userid, 'registry');
+	if (!$userid || !$hasflag) {
+		$self->client_notice(1, $nick, 'Insufficient permissions');
+		return;
+	}
+	if ($text =~ /^ view$/i) {
+		my $buffer = registry_pretty_print();
+		my @temp   = split(/\n/, $buffer);
+		foreach my $line (@temp) {
+			$self->client_message(1, $nick, $line);
+		}
+	}
+	if ($text =~ /^ write (.*?) (.*)$/i) {
+		registry_write($1, $2);
+	}
+	if ($text =~ /^ read (.*)$/i) {
+		$self->client_message(1, $nick, registry_read($1));
+	}
+}
+1;
+

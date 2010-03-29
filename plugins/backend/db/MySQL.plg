@@ -1,0 +1,526 @@
+#!/usr/bin/perl -w
+package backend::db::MySQL;
+use strict;
+use Azusa::MySQL;
+use CommonRoutines;
+
+BEGIN {
+	$__plugin_name    = 'backend.db.MySQL';
+	$__plugin_version = '1.0';
+	$__plugin_author  = 'ezbake consortium';
+	$__plugin_date    = 'under development';
+};
+
+$__plugin_handle  = backend::db::MySQL->new();
+
+sub new {
+       	my $self = shift;
+       	$self = bless({}, $self);
+       	for (my $x = 0; $x < $#_; $x += 2) {
+               	$self->{$_[$x]} = $_[$x+1];
+       	}
+       	return($self);
+}
+
+sub initialize {
+	my ($self) = @_;
+	registry_write('backend.db.handle', $self);
+
+	# check if required registry keys are set
+	registry_write('backend.db.MySQL.db_host', 'localhost') if (!registry_read('backend.db.MySQL.db_host'));
+	die('backend.db.MySQL.db_user is unset.')               if (!registry_read('backend.db.MySQL.db_user'));
+	die('backend.db.MySQL.db_name is unset.')               if (!registry_read('backend.db.MySQL.db_name'));
+}
+
+sub start {
+	my ($self) = @_;
+	debug('Initializing MySQL DB Backend plugin...', 0);
+	my $sql    = Azusa::MySQL->new( db_host   => registry_read('backend.db.MySQL.db_host'),
+					db_user   => registry_read('backend.db.MySQL.db_user'),
+					db_pass   => registry_read('backend.db.MySQL.db_pass'),
+					db_name   => registry_read('backend.db.MySQL.db_name'),
+					verbosity => registry_read('verbosity'));
+	$sql->login;
+	registry_write('backend.db.MySQL.db_handle', $sql);
+	registry_write('backend.db.MySQL.cache.hit', 0);
+	registry_write('backend.db.MySQL.cache.miss', 0);
+
+	# create tables if they don't exist already
+	my $table;
+	# internal_clients
+	$table = <<EOF;
+CREATE TABLE IF NOT EXISTS internal_clients (
+  cid int(11) NOT NULL AUTO_INCREMENT,
+  nick varchar(32) NOT NULL,
+  ident varchar(32) NOT NULL,
+  `host` varchar(255) NOT NULL,
+  realname varchar(512) NOT NULL,
+  PRIMARY KEY (cid)
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 AUTO_INCREMENT=1 ;
+EOF
+	$sql->query('DROP TABLE IF EXISTS internal_clients');
+	$sql->query($table);
+
+	# clients
+	$table = <<EOF;
+CREATE TABLE IF NOT EXISTS clients (
+  cid int(11) NOT NULL AUTO_INCREMENT,
+  nick varchar(32) NOT NULL,
+  ident varchar(32) NOT NULL,
+  `host` varchar(255) NOT NULL,
+  realname varchar(512) NOT NULL,
+  PRIMARY KEY (cid)
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 AUTO_INCREMENT=1 ;
+EOF
+	$sql->query('DROP TABLE IF EXISTS clients');
+	$sql->query($table);
+
+	# users
+	$table = <<EOF;
+CREATE TABLE IF NOT EXISTS users (
+  uid int(11) NOT NULL AUTO_INCREMENT,
+  username varchar(32) NOT NULL,
+  `password` text NOT NULL,
+  online tinyint(1) NOT NULL,
+  nick varchar(32) NOT NULL,
+  ident varchar(32) NOT NULL,
+  `host` varchar(255) NOT NULL,
+  vhost varchar(255) NOT NULL,
+  PRIMARY KEY (uid)
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 AUTO_INCREMENT=1 ;
+EOF
+	$sql->query($table);
+
+	# user flags
+	$table = <<EOF;
+CREATE TABLE IF NOT EXISTS permissions (
+  id int(11) NOT NULL,
+  flag varchar(64) NOT NULL
+) ENGINE=MyISAM DEFAULT CHARSET=latin1
+EOF
+	$sql->query($table);
+
+	# channels
+	$table = <<EOF;
+CREATE TABLE IF NOT EXISTS channels (
+  cid int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(64) NOT NULL,
+  PRIMARY KEY (cid)
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 AUTO_INCREMENT=1
+EOF
+	$sql->query('DROP TABLE IF EXISTS channels');
+	$sql->query($table);
+
+	# client<->channel lookup
+	$table = <<EOF;
+CREATE TABLE IF NOT EXISTS channel_client_lookup (
+  lid int(11) NOT NULL AUTO_INCREMENT,
+  channel int(11) NOT NULL,
+  `client` int(11) NOT NULL,
+  op tinyint(1) NOT NULL,
+  halfop tinyint(1) NOT NULL,
+  voice tinyint(1) NOT NULL,
+  PRIMARY KEY (lid)
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 AUTO_INCREMENT=1 ;
+EOF
+	$sql->query('DROP TABLE IF EXISTS channel_client_lookup');
+	$sql->query($table);
+
+	# registered channels
+	$table = <<EOF;
+CREATE TABLE IF NOT EXISTS registered_channels (
+  cid int(11) NOT NULL AUTO_INCREMENT,
+  channel varchar(64) NOT NULL,
+  owner int(11) NOT NULL,
+  topic varchar(512) NULL,
+  modes varchar(64) NOT NULL,
+  PRIMARY KEY (cid)
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 AUTO_INCREMENT=1
+EOF
+	$sql->query($table);
+
+	# registered channel flags
+	$table = <<EOF;
+CREATE TABLE IF NOT EXISTS registered_channel_flags (
+  pid int(11) NOT NULL AUTO_INCREMENT,
+  channel int(11) NOT NULL,
+  user int(11) NOT NULL,
+  flag varchar(64) NOT NULL,
+  PRIMARY KEY (pid)
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 AUTO_INCREMENT=1
+EOF
+	$sql->query($table);
+
+	# clean out logged in users from last run (if killed dirty)
+	$sql->query('UPDATE users SET online = 0, nick = NULL, ident = NULL, host = NULL');
+}
+
+sub do_nothing { # Send a keepalive to the server.
+	my ($self) = @_;
+	my $sql    = registry_read('backend.db.MySQL.db_handle');
+	$sql->query('SELECT 1');
+}
+
+sub shutdown {
+	undef(&new);
+	undef(&initialize);
+	undef(&start);
+	undef(&int_client_new);
+	undef(&int_client_nick);
+	undef(&client_nick_to_id);
+	undef(&client_id_to_nick);
+	undef(&channel_name_to_id);
+	undef(&channel_id_to_name);
+	undef(&client_new);
+	undef(&client_join);
+	undef(&client_part);
+	undef(&client_quit);
+	undef(&client_rename);
+}
+
+# Internal client utilities. These set values.
+
+sub int_client_new {
+	my ($self, $nick, $ident, $host, $gecos) = @_;
+	registry_read('backend.db.MySQL.db_handle')->query('INSERT INTO internal_clients(nick,ident,host,realname) VALUES(%s,%s,%s,%s)',
+							   $nick,
+							   $ident,
+							   $host,
+							   $gecos);
+	return(registry_read('backend.db.MySQL.db_handle')->last_insert_id);
+}
+
+sub int_client_nick {
+	my ($self, $cid) = @_;
+	my $sql          = registry_read('backend.db.MySQL.db_handle');
+	my ($nick);
+	if ($self->sql_cache('internal_clients:cid='.$cid.':nick')) {
+		$nick = $self->sql_cache('internal_clients:cid='.$cid.':nick');
+		$self->sql_cachehit();
+	}
+	else {
+		($nick) = $sql->query('SELECT nick FROM internal_clients WHERE cid = %d', $cid);
+		$self->sql_insertcache('internal_clients:cid='.$cid.':nick', $nick);
+		$self->sql_cachemiss();
+	}
+	return($nick);
+}
+
+# Internal client utilities. These return values.
+
+# External client utilities. These return values
+
+sub client_nick_to_id {
+	my ($self, $nick) = @_;
+	my $sql           = registry_read('backend.db.MySQL.db_handle');
+	my ($cid);
+	if ($self->sql_cache('clients:nick='.$nick.':cid')) {
+		$cid = $self->sql_cache('clients:nick='.$nick.':cid');
+		$self->sql_cachehit();
+	}
+	else {
+		($cid) = $sql->query('SELECT cid FROM clients WHERE nick = %s', $nick);
+		$self->sql_insertcache('clients:nick='.$nick.':cid', $cid);
+		$self->sql_cachemiss();
+	}
+	return($cid);
+}
+
+sub client_id_to_nick {
+	my ($self, $cid) = @_;
+	my $sql           = registry_read('backend.db.MySQL.db_handle');
+	my ($nick);
+	if ($self->sql_cache('clients:cid='.$cid.':nick')) {
+		$nick = $self->sql_cache('clients:cid='.$cid.':nick');
+		$self->sql_cachehit();
+	}
+	else {
+		($nick) = $sql->query('SELECT nick FROM clients WHERE cid = %d', $cid);
+		$self->sql_insertcache('clients:cid='.$cid.':nick', $nick);
+		$self->sql_cachemiss();
+	}
+	return($nick);
+}
+
+sub client_hostmask {
+	my ($self, $input) = @_;
+	my $sql            = registry_read('backend.db.MySQL.db_handle');
+	if ($input !~ /^\d+$/) { # not an id
+		$input = $self->client_nick_to_id($input);
+	}
+	my ($nick, $ident, $host);
+	$nick  = $self->sql_cache('clients:cid='.$input.':nick');
+	$ident = $self->sql_cache('clients:cid='.$input.':ident');
+	$host  = $self->sql_cache('clients:cid='.$input.':host');
+	if (!$nick || !$ident || !$host) {
+		$self->sql_cachemiss() if (!$nick);
+		$self->sql_cachemiss() if (!$ident);
+		$self->sql_cachemiss() if (!$host);
+		($nick, $ident, $host) = $sql->query('SELECT nick,ident,host FROM clients WHERE cid = %d', $input);
+	}
+	else {
+		foreach my $x (1..3) { $sql->cachehit(); }
+	}
+	return(($nick, $ident, $host));
+}
+sub channel_name_to_id {
+	my ($self, $name) = @_;
+	my $sql           = registry_read('backend.db.MySQL.db_handle');
+	my ($cid);
+	if ($self->sql_cache('channels:name='.$name.':cid')) {
+		$cid = $self->sql_cache('channels:name='.$name.':cid');
+		$self->sql_cachehit();
+	}
+	else {
+		($cid) = $sql->query('SELECT cid FROM channels WHERE name = %s', $name);
+		$self->sql_insertcache('channels:name='.$name.':cid', $cid);
+		$self->sql_cachemiss();
+	}
+	return($cid);
+}
+
+sub channel_id_to_name {
+	my ($self, $cid) = @_;
+	my $sql           = registry_read('backend.db.MySQL.db_handle');
+	my ($name);
+	if ($self->sql_cache('channels:cid='.$cid.':name')) {
+		$name = $self->sql_cache('channels:cid='.$cid.':name');
+		$self->sql_cachehit();
+	}
+	else {
+		($name) = $sql->query('SELECT name FROM channels WHERE cid = %d', $cid);
+		$self->sql_insertcache('channels:cid='.$cid.':name', $name);
+		$self->sql_cachemiss();
+	}
+	return($name);
+}
+
+# External client utilities. These set values.
+
+sub client_new {
+	my ($self, $nick, $ident, $host, $gecos) = @_;
+	registry_read('backend.db.MySQL.db_handle')->query('INSERT INTO clients(nick,ident,host,realname) VALUES(%s,%s,%s,%s)',
+							   $nick,
+							   $ident,
+							   $host,
+							   $gecos);
+	return(registry_read('backend.db.MySQL.db_handle')->last_insert_id);
+}
+
+sub client_join {
+	my ($self, $nick, $channel) = @_;
+	my $sql                     = registry_read('backend.db.MySQL.db_handle');
+	my @channels = split(/,/, $channel);
+	foreach $channel (@channels) {
+		my ($uid, $cid);
+		$uid                        = $self->client_nick_to_id($nick);
+		$cid                        = $self->channel_name_to_id($channel);
+		if (!$cid) {
+			$sql->query('INSERT INTO channels(name) VALUES(%s)', $channel);
+			$cid = $sql->last_insert_id;
+		}
+		$sql->query('INSERT INTO channel_client_lookup(channel,client) VALUES(%s,%s)', $cid, $uid);
+	}
+}
+
+sub client_part {
+	my ($self, $nick, $channel) = @_;
+	my $sql                     = registry_read('backend.db.MySQL.db_handle');
+	my ($uid, $cid);
+	$uid                        = $self->client_nick_to_id($nick);
+	$cid                        = $self->channel_name_to_id($channel);
+	debug('Deleting channel lookup entry chan_id='.$cid.' client_id='.$uid, 4);
+	$sql->query('DELETE FROM channel_client_lookup WHERE channel = %d AND client = %d', $cid, $uid);
+	my @users = $sql->query('SELECT lid FROM channel_client_lookup WHERE channel = %d', $cid);
+	if ($#users == -1) { # nobody left on the channel, clean it up
+		debug('Deleting channel entry '.$cid.' - nobody on channel', 4);
+		$sql->query('DELETE FROM channels WHERE cid = %d', $cid);
+	}
+}
+
+sub client_quit {
+	my ($self, $nick) = @_;
+	my $sql           = registry_read('backend.db.MySQL.db_handle');
+	my ($cid);
+	$cid              = $self->client_nick_to_id($nick);
+	$sql->query('DELETE FROM clients WHERE cid = %d', $cid);
+	my (@channels) = $sql->query('SELECT channel FROM channel_client_lookup WHERE client = %d', $cid);
+	foreach my $chanid (@channels) {
+		my $channel = $self->channel_id_to_name($chanid);
+		$self->client_part($nick, $channel);
+	}
+
+	my ($uid) = $self->user_nick_to_id($nick);
+	if ($uid) {
+		$self->user_logout($uid);
+	}
+}
+
+sub client_rename {
+	my ($self, $oldnick, $newnick) = @_;
+	my $sql                        = registry_read('backend.db.MySQL.db_handle');
+	my $cid                        = $self->client_nick_to_id($oldnick);
+	$sql->query('UPDATE clients SET nick = %s WHERE cid = %d', $cid);
+	$self->sql_insertcache('clients:cid='.$cid.':nick', $newnick);
+}
+
+# User utilities. These return values.
+sub user_name_to_id {
+	my ($self, $username) = @_;
+	my $sql		      = registry_read('backend.db.MySQL.db_handle');
+	my ($userid)          = $self->sql_cache('users:username='.$username.':uid');
+	if (!$userid) {
+		($userid)     = $sql->query('SELECT uid FROM users WHERE username = %s', $username);
+		$self->sql_insertcache('users:username='.$username.':uid', $userid);
+		$self->sql_cachemiss();
+	}
+	else {
+		$self->sql_cachehit();
+	}
+	return($userid);
+}
+sub user_nick_to_id {
+	my ($self, $nickname) = @_;
+	my $sql		      = registry_read('backend.db.MySQL.db_handle');
+	my ($userid);
+	if ($self->sql_cache('users:nick='.$nickname.':uid')) {
+		$userid = $self->sql_cache('users:nick='.$nickname.':uid');
+		$self->sql_cachehit();
+	}
+	else {
+		($userid) = $sql->query('SELECT uid FROM users WHERE nick = %s', $nickname);
+		$self->sql_insertcache('users:nick='.$nickname.':uid', $userid);
+		$self->sql_cachemiss();
+	}
+	return($userid);
+}
+
+sub user_logged_in {
+	my ($self, $userid) = @_;
+	my $sql             = registry_read('backend.db.MySQL.db_handle');
+	my ($logged_in);
+	if ($self->sql_cache('users:uid='.$userid.':online')) {
+		$logged_in = $self->sql_cache('users:uid='.$userid.':online');
+		$self->sql_cachehit();
+	}
+	else {
+		($logged_in) = $sql->query('SELECT online FROM users WHERE uid = %d', $userid);
+		$self->sql_insertcache('users:uid='.$userid.':online', $logged_in);
+		$self->sql_cachemiss();
+	}
+	return($logged_in);
+}
+
+
+# User utilities. These set values.
+
+sub user_create {
+	my ($self, $username, $password) = @_;
+	my $sql                          = registry_read('backend.db.MySQL.db_handle');
+	$sql->query('INSERT INTO users(username, password, online) VALUES(%s,%s,0)', $username, gen_hash($password));
+	return($sql->last_insert_id);
+}
+
+sub user_identify {
+	my ($self, $nick, $user, $pass) = @_;
+	my $sql                         = registry_read('backend.db.MySQL.db_handle');
+	my $uid                         = $self->user_name_to_id($user);
+	my ($online)                    = $self->sql_cache('users:uid='.$uid.':online');
+	return(-2) if (!$uid);
+	my ($exist)                     = $sql->query('SELECT username FROM users WHERE password = %s AND uid = %d', gen_hash($pass), $uid);
+	return(-2) if (!$exist);
+	if (!$online) {
+		($online) = $sql->query('SELECT online FROM users WHERE uid = %d', $uid);
+		$self->sql_cachemiss();
+	}
+	else {
+		$self->sql_cachehit();
+	}
+	return(-1) if ($online);
+	my (undef, $ident, $host) = $self->client_hostmask($nick);
+	$sql->query('UPDATE users SET nick = %s, ident = %s, host = %s, online = 1 WHERE uid = %d', $nick, $ident, $host, $uid);
+
+	# fill in some relevant cache entries
+	$self->sql_insertcache('users:uid='.$uid.':username', $user);
+	$self->sql_insertcache('users:uid='.$uid.':nick', $nick);
+	$self->sql_insertcache('users:uid='.$uid.':online', 1);
+	$self->user_vhost_apply($uid);
+	return($uid);
+}
+
+sub user_logout {
+	my ($self, $userid) = @_;
+	my $sql             = registry_read('backend.db.MySQL.db_handle');
+	$sql->query('UPDATE users SET nick = "", ident = "", host = "", online = 0 WHERE uid = %d', $userid);
+	$self->sql_insertcache('users:uid='.$userid.':username', 0);
+	$self->sql_insertcache('users:uid='.$userid.':nick', 0);
+	$self->sql_insertcache('users:uid='.$userid.':online', 0);
+}
+
+sub user_vhost_apply {
+	my ($self, $userid) = @_;
+	my $sql             = registry_read('backend.db.MySQL.db_handle');
+	my ($vhost)         = $self->sql_cache('users:uid='.$userid.':vhost');
+	my ($nick)          = $self->sql_cache('users:uid='.$userid.':nick');
+	if (!$vhost) {
+		($vhost) = $sql->query('SELECT vhost FROM users WHERE uid = %d', $userid);
+		$self->sql_insertcache('users:uid='.$userid.':vhost', $vhost) if ($vhost);
+		$self->sql_cachemiss() if ($vhost);
+	}
+	else {
+		$self->sql_cachehit();
+	}
+	if (!$nick) {
+		($vhost) = $sql->query('SELECT nick FROM users WHERE uid = %d', $userid);
+		$self->sql_insertcache('users:uid='.$userid.':nick', $nick) if ($nick);
+		$self->sql_cachemiss() if ($nick);
+	}
+	else {
+		$self->sql_cachehit();
+	}
+	registry_read('backend.irc.handle')->client_change_host($nick, $vhost) if ($vhost);
+}
+
+sub user_vhost_set {
+	my ($self, $userid, $vhost) = @_;
+	my $sql                     = registry_read('backend.db.MySQL.db_handle');
+	my ($nick)                  = $self->sql_cache('users:uid='.$userid.':nick');
+	if (!$nick) {
+		($vhost) = $sql->query('SELECT nick FROM users WHERE uid = %d', $userid);
+		$self->sql_insertcache('users:uid='.$userid.':nick', $nick) if ($nick);
+		$self->sql_cachemiss() if ($nick);
+	}
+	else {
+		$self->sql_cachehit();
+	}
+	$self->sql_insertcache('users:uid='.$userid.':vhost', $vhost);
+	$sql->query('UPDATE users SET vhost = %s WHERE uid = %d', $vhost, $userid);
+	$self->user_vhost_apply($userid);
+}
+
+# MySQL cache routines
+
+sub sql_cache {
+	my ($self, $value) = @_;
+	return($self->{sql_cache}{$value});
+}
+
+sub sql_flushcache {
+	my ($self) = @_;
+	undef($self->{sql_cache});
+}
+
+sub sql_insertcache {
+	my ($self, $key, $value) = @_;
+	$self->{sql_cache}{$key} = $value;
+}
+
+sub sql_cachehit {
+	registry_write('backend.db.MySQL.cache.hit', registry_read('backend.db.MySQL.cache.hit') + 1);
+}
+
+sub sql_cachemiss {
+	registry_write('backend.db.MySQL.cache.miss', registry_read('backend.db.MySQL.cache.miss') + 1);
+}
+
+1;

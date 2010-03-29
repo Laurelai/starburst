@@ -1,0 +1,110 @@
+#!/usr/bin/perl -w
+package command::help;
+use strict;
+use CommonRoutines;
+
+BEGIN {
+	$__plugin_name    = 'Command: HELP';
+	$__plugin_version = '1.0';
+	$__plugin_author  = 'ezbake consortium';
+	$__plugin_date    = 'under development';
+};
+
+$__plugin_handle  = command::help->new();
+
+sub new {
+       	my $self = shift;
+       	$self = bless({}, $self);
+       	for (my $x = 0; $x < $#_; $x += 2) {
+               	$self->{$_[$x]} = $_[$x+1];
+       	}
+       	return($self);
+}
+
+sub initialize {
+	my ($self) = @_;
+	registry_read('core')->event_insert('CMD_help', '^.* PRIVMSG '.registry_read('irc.nickname').' :help', \&command_help);
+}
+
+sub shutdown {
+	my ($self) = @_;
+	undef(&command_help);
+	registry_read('core')->event_delete('CMD_help');
+	undef($self);
+	return(0);
+}
+
+sub command_help {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	$data      =~ /^:(.*) PRIVMSG .* :help(.*)/;
+	my ($nick, $text) = ($1, $2);
+	my $botnick       = registry_read('irc.nickname');
+	my ($helpdoc);
+	if (!$text) { # base help query
+		$helpdoc = <<EOF;
+starburst services manual
+/msg $botnick HELP USER to read more about user related things such as registration and identification.
+/msg $botnick HELP CHANNEL to read more about channel related things such as registration and management.
+EOF
+	}
+	elsif ($text =~ /user$/i) {
+		$helpdoc = <<EOF;
+starburst services manual
+USER related commands
+USER REGISTER - Parameters: USER REGISTER <username> <password>
+Register a user in the starburst system. The username don't have to be the same as your nickname.
+USER IDENTIFY - Parameters: USER IDENTIFY <username> <password>
+Identifies to your account in the starburst system. If you are already logged in, identifying will automatically disconnect your old nickname.
+USER LOGOUT - Parameters: USER LOGOUT
+Unidentifies you from your account.
+USER VHOST - Parameters: USER VHOST <vhost>
+Sets a vhost for your account, which is automatically enabled upon identification.
+EOF
+	}
+	elsif ($text =~ /channel acllist$/i) {
+		$helpdoc = <<EOF;
+The following flags are specified with a specific username.
+Example: /msg $botnick CHANNEL ACL ADD #starburst bob voice
+op - automatically ops a user on join.
+halfop - automatically halfops a user upon join.
+voice - automatically voices a user upon join.
+The following flags are specified with no user.
+Example: /msg $botnick CHANNEL ACL ADD #starburst autoop
+autoop - automatically ops all clients that join.
+autohalfop - automatically halfops all clients that join.
+autovoice - automatically voices all clients that join.
+EOF
+	}
+	elsif ($text =~ /channel$/i) {
+		$helpdoc = <<EOF;
+starburst services manual
+CHANNEL related commands
+CHANNEL REGISTER - Parameters: CHANNEL REGISTER <channel>
+Registers a channel under your username in the starburst system. Requires you to be opped in the channel in question.
+CHANNEL ACL - Parameters: CHANNEL ACL <VIEW/ADD/DEL> [...]
+Manages the channel access control list. Starburst handles channels based on flags, instead of the AOP/SOP system in most services.
+/msg $botnick HELP CHANNEL ACLLIST for a list of ACL flags.
+CHANNEL ACL VIEW - Parameters: CHANNEL ACL VIEW <channel>
+Displays the ACL table for <channel>.
+CHANNEL ACL ADD - Parameters: CHANNEL ACL ADD <channel> <username> <flag>
+Adds a flag to <channel> under <username>.
+CHANNEL ACL DEL - Parameters: CHANNEL ACL DEL <channel> <username> <flag>
+Deletes a flag from <channel> under <username>
+CHANNEL PRIVATE - Parameters: CHANNEL PRIVATE <USER/ENABLE/DISABLE> [...]
+CHANNEL PRIVATE USER - Parameters CHANNEL PRIVATE USER <channel> <username> <on/off>
+Enables private access in <channel> for <username>.
+CHANNEL PRIVATE ENABLE - Parameters CHANNEL PRIVATE ENABLE <channel>
+Enables private mode in <channel>. Sets modelock to +si and automatically joins the users you specify to <channel> when they identify.
+CHANNEL PRIVATE DISABLE - Parameters CHANNEL PRIVATE DISABLE <channel>
+Disables private mode in <channel> and removes +si from the modelock.
+EOF
+	}
+	my @temp = split(/\n/, $helpdoc);
+	foreach my $line (@temp) {
+		$self->client_notice(1, $nick, $line);
+	}
+}
+
+1;
+

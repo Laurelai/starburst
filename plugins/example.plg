@@ -1,0 +1,34 @@
+#!/usr/bin/perl -w
+package plugin;
+use strict;
+use CommonRoutines;
+
+BEGIN {
+	$__plugin_name    = 'plugin.name';
+	$__plugin_version = '1.0';
+	$__plugin_author  = 'author';
+	$__plugin_date    = 'date';
+};
+
+$__plugin_handle  = plugin->new();
+
+sub new {
+       	my $self = shift;
+       	$self = bless({}, $self);
+       	for (my $x = 0; $x < $#_; $x += 2) {
+               	$self->{$_[$x]} = $_[$x+1];
+       	}
+       	return($self);
+}
+
+sub initialize {
+	my ($self) = @_;
+}
+
+sub shutdown {
+	undef(&new);
+	undef(&initialize);
+}
+
+1;
+

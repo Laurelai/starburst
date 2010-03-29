@@ -1,0 +1,440 @@
+#!/usr/bin/perl -w
+package backend::irc::Unreal32;
+use strict;
+use Azusa::MySQL;
+use CommonRoutines;
+
+use IO::Socket::INET;
+
+BEGIN {
+	$__plugin_name    = 'backend.irc.Unreal32';
+	$__plugin_version = '1.0';
+	$__plugin_author  = 'ezbake consortium';
+	$__plugin_date    = 'under development';
+
+};
+
+$__plugin_handle  = backend::irc::Unreal32->new();
+
+sub new {
+       	my $self = shift;
+       	$self = bless({}, $self);
+       	for (my $x = 0; $x < $#_; $x += 2) {
+               	$self->{$_[$x]} = $_[$x+1];
+       	}
+       	return($self);
+}
+
+sub initialize {
+	my ($self) = @_;
+	debug('Initializing UnrealIRCd 3.2 protocol plugin...', 0);
+	registry_write('backend.irc.handle', $self);
+
+	# check if we have the modules for certain extensions.
+	eval('use IO::Socket::SSL;');
+	if ($@) {
+		debug('No SSL support. Please install IO::Socket::SSL from cpan (cpan -i IO::Socket::SSL)', 0);
+		registry_write('backend.irc.Unreal32.link.usessl', 0);
+	}
+	eval('use Compress::Zlib;');
+	if ($@) {
+		debug('No ziplink support. Please install Compress::Zlib from cpan (cpan -i Compress::Zlib)', 0);
+		registry_write('backend.irc.Unreal32.link.usezip', 0);
+	}
+	eval('use IO::Socket::INET6;');
+	if ($@) {
+		debug('No IPv6 support. Please install IO::Socket::INET6 from cpan (cpan -i IO::Socket::INET6)', 0);
+		registry_write('backend.irc.Unreal32.link.usev6', 0);
+	}
+
+	# The config allows for the use of: yes, on, enabled, true	for 1
+	# 		and for the use of: no, off, disabled, false	for 0
+	registry_write('backend.irc.Unreal32.link.usessl', 1)
+		if (registry_read('backend.irc.Unreal32.link.usessl') =~ m/^(yes|on|enabled|true)$/i);
+	registry_write('backend.irc.Unreal32.link.usev6', 1)
+		if (registry_read('backend.irc.Unreal32.link.usev6') =~ m/^(yes|on|enabled|true)$/i);
+	registry_write('backend.irc.Unreal32.link.usezip', 1)
+		if (registry_read('backend.irc.Unreal32.link.usezip') =~ m/^(yes|on|enabled|true)$/i);
+
+	registry_write('backend.irc.Unreal32.link.usessl', 0)
+		if (registry_read('backend.irc.Unreal32.link.usessl') =~ m/^(no|off|disabled|false)$/i);
+	registry_write('backend.irc.Unreal32.link.usev6', 0)
+		if (registry_read('backend.irc.Unreal32.link.usev6') =~ m/^(no|off|disabled|false)$/i);
+	registry_write('backend.irc.Unreal32.link.usezip', 0)
+		if (registry_read('backend.irc.Unreal32.link.usezip') =~ m/^(no|off|disabled|false)$/i);
+
+	registry_write('backend.irc.Unreal32.link.usezip', 0); # not implemented
+}
+
+sub start {
+	my ($self) = @_;
+	my ($socket, $linkflags);
+	$linkflags = '-C';
+	# No SSL, No IPv6
+	if (!registry_read('backend.irc.Unreal32.link.usessl') &&  !registry_read('backend.irc.Unreal32.link.usev6')) {
+		$socket = IO::Socket::INET->new(        PeerHost => registry_read('backend.irc.Unreal32.link.host'),
+							PeerPort => registry_read('backend.irc.Unreal32.link.port'),
+							Proto    => 'tcp');
+
+	}
+	# No SSL, IPv6 Enabled
+	elsif (!registry_read('backend.irc.Unreal32.link.usessl') && registry_read('backend.irc.Unreal32.link.usev6')) {
+		$socket = IO::Socket::INET6->new(       PeerHost =>  registry_read('backend.irc.Unreal32.link.host'),
+							PeerPort =>  registry_read('backend.irc.Unreal32.link.port'),
+							Proto    => 'tcp');
+		$linkflags .= '6';
+	}
+	# SSL (IPv6 automatically handled)
+	else {
+		$socket = IO::Socket::SSL->new(         PeerHost => registry_read('backend.irc.Unreal32.link.host'),
+							PeerPort => registry_read('backend.irc.Unreal32.link.port'),
+							Proto    => 'tcp');
+		$linkflags .= 'e';
+		$linkflags .=  6 if (registry_read('backend.irc.Unreal32.link.usev6'));
+	}
+	if (!$socket) {
+		debug('No socket created. Please check your configuration options. Enable verbosity for error message.', 0);
+		debug($@, 1);
+		exit(1);
+	}
+	if (registry_read('backend.irc.Unreal32.link.usezip')) {
+		my $ds = deflateInit();
+		my $is = inflateInit();
+		if (!$ds || !$is) {
+			debug('Failed to create {de,}compression stream. Disabling ziplinks.', 0);
+			debug('zlib status code: '.$ds->msg.' '.$is->msg, 1);
+			registry_write('backend.irc.Unreal32.link.usezip', 0);
+		}
+		else {
+			registry_write('backend.irc.Unreal32.link.zip.deflate_handle', $ds);
+			registry_write('backend.irc.Unreal32.link.zip.inflate_handle', $is);
+		}
+		$linkflags .= 'Z';
+	}
+	registry_write('backend.irc.socket', $socket);
+
+	$self->sendraw('PASS %s', registry_read('backend.irc.Unreal32.link.pass'));
+	$self->sendraw('PROTOCTL :NICKv2 NICKIP VL');
+	$self->sendraw('SERVER %s 1 :U2309%s %s', registry_read('irc.hostname'), $linkflags, registry_read('irc.hostname'));
+	$self->sendraw('NETINFO 0 %d 2309 * 0 0 0 :%s', time, registry_read('backend.irc.Unreal32.link.network'));
+	$self->sendraw(':%s EOS', registry_read('irc.hostname'));
+
+	# insert event strings
+	registry_read('core')->event_insert('PING',     '^PING :.*$',             \&proto_ping);
+	registry_read('core')->event_insert('EOS',      '^:.* EOS$',              \&proto_eos);
+	registry_read('core')->event_insert('MESSAGE',  '^:.*? PRIVMSG .*? :.*$', \&proto_privmsg);
+	registry_read('core')->event_insert('NEWUSER',  '^NICK .*$',              \&proto_new_client);
+	registry_read('core')->event_insert('NICK',     '^:.*? NICK .*$',         \&proto_nick_change);
+	registry_read('core')->event_insert('MODE',     '^:.*? MODE .*? :.*$',    \&proto_mode);
+	registry_read('core')->event_insert('JOIN',     '^:.*? JOIN .*$',         \&proto_join);
+	registry_read('core')->event_insert('PART',     '^:.*? PART .*$',         \&proto_part);
+	registry_read('core')->event_insert('QUIT',     '^:.*? QUIT :.*$',        \&proto_quit);
+}
+
+sub shutdown {
+	registry_read('core')->event_delete('PING');
+	registry_read('core')->event_delete('EOS');
+	registry_read('core')->event_delete('MESSAGE');
+	registry_read('core')->event_delete('NEWUSER');
+	registry_read('core')->event_delete('NICK');
+	registry_read('core')->event_delete('MODE');
+	registry_read('core')->event_delete('JOIN');
+	registry_read('core')->event_delete('PART');
+	registry_read('core')->event_delete('QUIT');
+
+	undef(&new);
+	undef(&initialize);
+	undef(&start);
+	undef(&proto_ping);
+	undef(&proto_eos);
+	undef(&proto_privmsg);
+	undef(&proto_new_client);
+	undef(&proto_nick_change);
+	undef(&proto_mode);
+	undef(&proto_join);
+	undef(&proto_part);
+	undef(&proto_quit);
+	undef(&client_new);
+	undef(&client_join);
+	undef(&client_part);
+	undef(&client_kick);
+	undef(&client_invite);
+	undef(&client_change_host);
+	undef(&client_force_join);
+	undef(&client_force_part);
+	undef(&client_topic);
+	undef(&client_force_kill);
+	undef(&client_force_mode);
+	undef(&client_mode);
+	undef(&client_force_nick);
+	undef(&client_message);
+	undef(&client_notice);
+	undef(&client_gline);
+	undef(&client_gzline);
+	undef(&client_ungline);
+	undef(&client_ungzline);
+	undef(&sendraw);
+	undef(&readraw);
+	return(0);
+}
+
+sub proto_ping {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	$data      =~ /^PING :(.*)$/;
+	$self->sendraw('PONG :%s', $1);
+	registry_read('backend.db.handle')->do_nothing(); # mainly: mysql not choking on its own dick
+}
+
+sub proto_eos {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	debug('IRCd sent synch', 1);
+	# registry_read('core')->join_registered_channels();
+}
+
+sub proto_privmsg {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	$data      =~ /^:(.*?) PRIVMSG (.*?) :(.*)$/;
+	my ($nick, $dest, $message) = ($1, $2, $3);
+	debug('<'.$nick.':'.$dest.'> '.$message, 2);
+}
+
+sub proto_new_client {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	$data      =~ /^NICK (.*?) \d \d+ (.*?) (.*?) .*? \d :(.*?)$/;
+	my ($nick, $ident, $host, $realname) = ($1, $2, $3, $4);
+	debug('New user '.$nick.'!'.$ident.'@'.$host, 2);
+	registry_read('backend.db.handle')->client_new($nick, $ident, $host, $realname);
+}
+
+sub proto_nick_change {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	$data      =~ /^:(.*?) NICK (.*?) \d+$/;
+	my ($oldnick, $newnick) = ($1, $2);
+	debug($oldnick.' has changed his/her nickname to '.$newnick, 2);
+	registry_read('backend.db.handle')->client_rename($oldnick, $newnick);
+}
+
+sub proto_mode {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	$data      =~ /^:(.*?) MODE (.*?) :(.*)$/;
+	my ($nick, $dest, $mode) = ($1, $2, $3);
+	debug($nick.' sets mode '.$mode.' in/on '.$dest, 2);
+}
+
+sub proto_join {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	$data      =~ /^:(.*?) JOIN (.*?)$/;
+	my ($nick, $channel) = ($1, $2);
+	debug($nick.' has joined '.$channel, 2);
+	registry_read('backend.db.handle')->client_join($nick, $channel);
+}
+
+sub proto_part {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	my ($nick, $channel, $reason);
+	if ($data  =~ /^:(.*?) PART (.*?) :(.*)$/) { # part with reason
+		($nick, $channel, $reason) = ($1, $2, $3);
+	}
+	else {
+		$data      =~ /^:(.*?) PART (.*?)$/;
+		($nick, $channel) = ($1, $2);
+	}
+	debug($nick.' has left '.$channel.($reason ? ' ('.$reason.')' : ''), 2);
+	registry_read('backend.db.handle')->client_part($nick, $channel);
+}
+
+sub proto_quit {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	$data      =~ /^:(.*?) QUIT :(.*?)$/;
+	my ($nick, $message) = ($1, $2);
+	debug($nick.' has quit: '.$message);
+	registry_read('backend.db.handle')->client_quit($nick);
+}
+
+sub client_new {
+	my ($self, $nick, $ident, $host, $gecos) = @_;
+	my $cid                           = registry_read('backend.db.handle')->int_client_new($nick, $ident, $host, $gecos);
+	$self->sendraw(':%s NICK %s 1 %d %s %s %s %d :%s',
+			registry_read('irc.hostname'),
+			$nick,
+			time,
+			$ident,
+			$host,
+			registry_read('irc.hostname'),
+			0,
+			$gecos);
+	$self->client_mode($cid, '+Sq');
+	return($cid);
+}
+
+sub client_join {
+	my ($self, $cid, $channels) = @_;
+	my $nick                    = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s JOIN %s', $nick, $channels);
+}
+
+sub client_part {
+	my ($self, $cid, $channel, $reason) = @_;
+	my $nick                            = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s PART %s %s', $nick, $channel, ':'.$reason);
+}
+
+sub client_kick {
+	my ($self, $cid, $target, $channel, $reason) = @_;
+	my $nick                                     = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s KICK %s %s %s', $nick, $channel, $target, $reason);
+}
+
+sub client_invite {
+	my ($self, $cid, $target, $channel) = @_;
+	my $nick 			    = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s INVITE %s %s', $nick, $target, $channel);
+}
+
+sub client_change_host {
+	my ($self, $cid, $target, $newhost) = @_;
+	my $nick			    = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s CHGHOST %s %s', $nick, $target, $newhost);
+}
+
+sub client_force_join {
+	my ($self, $cid, $target, $channel) = @_;
+	my $nick			    = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s SAJOIN %s %s', $nick, $target, $channel);
+}
+
+sub client_force_part {
+	my ($self, $cid, $target, $channel, $reason) = @_;
+	my $nick 				     = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s SAJOIN %s %s', $nick, $target, $channel);
+}
+
+sub client_topic {
+	my ($self, $cid, $channel, $topic) = @_;
+	my ($nick, $ident, $host)          = registry_read('backend.db.handle')->int_client_hostmask($cid);
+	$self->sendraw(':%s TOPIC %s %s %d :%s', $nick, $channel, sprintf('%s!%s@%s', $nick, $ident, $host), time, $topic);
+}
+
+sub client_force_kill {
+	my ($self, $cid, $target, $reason) = @_;
+	my $nick			   = registry_read('backend.db.handle')->int_client_nick($cid);
+	$reason = 'Disconnected by services.' if (!$reason);
+	$self->sendraw(':%s SVSKILL %s :%s', $nick, $target, $reason);
+}
+
+sub client_force_mode {
+	my ($self, $cid, $target, $modes) = @_;
+	my $nick			  = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s SVS2MODE %s %s', $nick, $target, $modes);
+}
+
+sub client_mode {
+	my ($self, $cid, $target, $modes) = @_;
+	my $nick			  = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s MODE %s %s', $nick, $target, $modes);
+}
+
+sub client_force_nick {
+	my ($self, $cid, $target, $newnick) = @_;
+	my $nick			    = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s SVSNICK %s %s %d', $nick, $target, $newnick, time);
+}
+
+sub client_message {
+	my ($self, $cid, $target, $message) = @_;
+	my $nick			    = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s PRIVMSG %s :%s', $nick, $target, $message);
+}
+
+sub client_notice {
+	my ($self, $cid, $target, $message) = @_;
+	my $nick 			    = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s NOTICE %s :%s', $nick, $target, $message);
+}
+
+sub client_gline {
+	my ($self, $cid, $target, $duration, $reason) = @_;
+	my ($nick, $ident, $host)                     = registry_read('backend.db.handle')->int_client_hostmask($cid);
+	my ($tnick, $tident, $thost);
+	if ($target !~ /\@/) { # just a nickname
+		($tnick, $tident, $thost) = registry_read('backend.db.handle')->client_hostmask(registry_read('backend.db.handle')->client_nick_to_id($target));
+	}
+	else {
+		($tident, $thost) = split(/\@/, $target);
+	}
+	$duration += time if ($duration);
+	$self->sendraw('TKL + G %s %s %s %d %d :%s', $tident, $thost, sprintf('%s!%s@%s', $nick, $ident, $host), $duration, time, $reason);
+}
+
+sub client_gzline {
+	my ($self, $cid, $target, $duration, $reason) = @_;
+	my ($nick, $ident, $host)                     = registry_read('backend.db.handle')->int_client_hostmask($cid);
+	$duration += time if ($duration);
+	$self->sendraw('TKL + Z %s %s %d %d :%s', $target, sprintf('%s!%s@%s', $nick, $ident, $host), $duration, time, $reason);
+}
+
+sub client_ungline {
+	my ($self, $cid, $target) = @_;
+	my ($nick, $ident, $host) = registry_read('backend.db.handle')->int_client_hostmask($cid);
+	my ($tident, $thost)      = split(/\@/, $target);
+	$self->sendraw('TKL - G %s %s %s %s', $tident, $thost, sprintf('%s!%s@%s', $nick, $ident, $host));
+}
+
+sub client_ungzline {
+        my ($self, $cid, $target) = @_;
+        my ($nick, $ident, $host) = registry_read('backend.db.handle')->int_client_hostmask($cid);
+        $self->sendraw('TKL - Z %s %s %s%s', $target, sprintf('%s!%s@%s', $nick, $ident, $host));
+}
+
+sub sendraw {
+	my ($self, $data) = (shift, shift); # don't bust @_
+	my $socket        = registry_read('backend.irc.socket');
+	$data .= "\r\n";
+	$data  = sprintf($data, @_);
+	if (registry_read('backend.irc.Unreal32.link.usezip')) {
+		my ($deflate)           = registry_read('backend.irc.Unreal32.link.zip.deflate_handle');
+		my ($deflated, $status) = $deflate->deflate($data);
+		if ($status) {
+			debug('Failed to deflate outgoing data. Closing socket connection. ', 0);
+			debug($deflate->msg, 1);
+			$socket->close;
+			return;
+		}
+		$data = $deflated;
+	}
+	syswrite($socket, $data);
+}
+
+sub readraw {
+	my ($self) = @_;
+	my $data;
+	my $socket = registry_read('backend.irc.socket');
+	if (registry_read('backend.irc.Unreal32.link.usezip')) {
+		my ($inflate)           = registry_read('backend.irc.Unreal32.link.zip.inflate_handle');
+		my ($inflated, $status) = $inflate->inflate($data);
+		if ($status) {
+			debug('Failed to inflate incoming data. Closing socket connection. ', 0);
+			debug($inflate->msg, 1);
+			$socket->close;
+			return;
+		}
+		$data = $inflated;
+	}
+	else {
+		$data = <$socket>;
+	}
+	$data =~ s/(\r|\n)//g;
+	return($data);
+}
+
+1;
+

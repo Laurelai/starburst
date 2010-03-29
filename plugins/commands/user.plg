@@ -1,0 +1,132 @@
+#!/usr/bin/perl -w
+package command::user;
+use strict;
+use CommonRoutines;
+
+BEGIN {
+	$__plugin_name    = 'Command: USER';
+	$__plugin_version = '1.0';
+	$__plugin_author  = 'ezbake consortium';
+	$__plugin_date    = 'under development';
+};
+
+$__plugin_handle  = command::user->new();
+
+sub new {
+       	my $self = shift;
+       	$self = bless({}, $self);
+       	for (my $x = 0; $x < $#_; $x += 2) {
+               	$self->{$_[$x]} = $_[$x+1];
+       	}
+       	return($self);
+}
+
+sub initialize {
+	my ($self) = @_;
+	registry_read('core')->event_insert('CMD_user', '^.* PRIVMSG '.registry_read('irc.nickname').' :user', \&command_user);
+}
+
+sub shutdown {
+	undef(&new);
+	undef(&initialize);
+	undef(&command_user);
+	registry_read('core')->event_delete('CMD_user');
+}
+
+sub command_user {
+	my ($data)        = @_;
+	my $self          = registry_read('backend.irc.handle');
+	my $botnick       = registry_read('irc.nickname');
+	my $db            = registry_read('backend.db.handle');
+	$data             =~ /^:(.*) PRIVMSG .* :user(.*)/;
+	my ($nick, $text) = ($1, $2);
+	$text = substr($text, 1) if (substr($text, 0, 1) eq ' ');
+	my @buffer = split(/\s/, $text);
+	if ($buffer[0] eq 'register') {
+		my ($user, $pass) = @buffer[1,2];
+		my $userid        = $db->user_name_to_id($user);
+		my $loggedin      = $db->user_logged_in($userid);
+		if (!$user || !$pass) {
+			$self->client_notice(1, $nick, 'Parameters for REGISTER are: USER REGISTER <username> <password>');
+			return;
+		}
+		if ($userid) {
+			$self->client_notice(1, $nick, 'Username '.$user.' already exists.');
+			return;
+		}
+		if ($loggedin) {
+			$self->client_notice(1, $nick, 'You are already logged in as '.$loggedin.'.');
+			return;
+		}
+		my $uid = $db->user_create($user, $pass);
+		$db->user_identify($nick, $user, $pass);
+		$self->client_notice(1, $nick, 'Successfully created username '.$user.' (uid '.$uid.')!');
+		$self->client_notice(1, $nick, 'You have been automatically identified as '.$user.'.');
+		$self->client_notice(1, $nick, 'Please note that these services are '.chr(2).'username based'.chr(2).' and not nickname based.') if (registry_read('irc.stupid_idiots'));
+	}
+	elsif ($buffer[0] eq 'identify') {
+		my ($user, $pass) = @buffer[1,2];
+		my $loggedin      = $db->user_logged_in($db->user_nick_to_id($nick));
+		if (!$user || !$pass) {
+			$self->client_notice(1, $nick, 'Parameters for IDENTIFY are: USER IDENTIFY <username> <password>');
+			return;
+		}
+		if ($loggedin) {
+			$self->client_notice(1, $nick, 'You are already logged in as '.$loggedin.'.');
+			return;
+		}
+		undef($loggedin);
+		$loggedin = $db->user_identify($nick, $user, $pass);
+		if ($loggedin == -2) { # incorrect details
+			$self->client_notice(1, $nick, 'Incorrect username/password.');
+			return;
+		}
+		if ($loggedin == -1) { # ghost
+			my $oldnick = $db->user_name_to_nick($user);
+			$self->client_notice(1, $nick, 'Username is in use by '.$oldnick.'. Killing old login session.');
+			$db->user_logout($db->user_name_to_id($user));
+			$self->client_force_kill(1, $oldnick, 'Username re-identified by '.$nick);
+			$loggedin = $db->user_identify($nick, $user, $pass);
+			if ($loggedin < 0) { # should be impossible to make it here, but cover our bases anyway.
+				$self->client_notice(1, $nick, 'Unknown error while attempting to identify you. Please report this bug.');
+				return;
+			}
+		}
+		else {
+			$self->client_notice(1, $nick, 'Successfully identified.');
+			return;
+		}
+	}
+	elsif ($buffer[0] eq 'vhost') {
+		my ($vhost) = $buffer[1];
+		my $userid        = $db->user_nick_to_id($nick);
+		my $loggedin      = $db->user_logged_in($userid);
+		if (!$vhost) {
+			$self->client_notice(1, $nick, 'Parameters for VHOST are: USER VHOST <vhost>');
+			return;
+		}
+		if (!$loggedin) {
+			$self->client_notice(1, $nick, 'You are not identified.');
+			return;
+		}
+		$db->user_vhost_set($userid, $vhost);
+		$self->client_notice(1, $nick, 'VHost set.');
+	}
+	elsif ($buffer[0] eq 'logout') {
+		my $userid        = $db->user_nick_to_id($nick);
+		my $loggedin      = $db->user_logged_in($userid);
+		if (!$loggedin) {
+			$self->client_notice(1, $nick, 'You are not identified.');
+			return;
+		}
+		$db->user_logout($userid);
+		$self->client_notice(1, $nick, 'Successfully logged out.');
+	}
+	else {
+		$self->client_message(1, $nick, 'Incorrect parameters. Please try HELP USER');
+		return;
+	}
+}
+
+1;
+
