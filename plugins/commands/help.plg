@@ -23,7 +23,7 @@ sub new {
 
 sub initialize {
 	my ($self) = @_;
-	registry_read('core')->event_insert('CMD_help', '^.* PRIVMSG '.registry_read('irc.nickname').' :help', \&command_help);
+	registry_read('core')->event_insert('CMD_help', 'privmsg', '^help', \&command_help);
 }
 
 sub shutdown {
@@ -35,20 +35,19 @@ sub shutdown {
 }
 
 sub command_help {
-	my ($data) = @_;
+	my ($nick, $target, $message) = @_;
 	my $self   = registry_read('backend.irc.handle');
-	$data      =~ /^:(.*) PRIVMSG .* :help(.*)/;
-	my ($nick, $text) = ($1, $2);
 	my $botnick       = registry_read('irc.nickname');
 	my ($helpdoc);
-	if (!$text) { # base help query
+	my @message = split(/\s/, $message);
+	if (!$message[1]) { # base help query
 		$helpdoc = <<EOF;
 starburst services manual
 /msg $botnick HELP USER to read more about user related things such as registration and identification.
 /msg $botnick HELP CHANNEL to read more about channel related things such as registration and management.
 EOF
 	}
-	elsif ($text =~ /user$/i) {
+	elsif ($message[1] =~ /user$/i) {
 		$helpdoc = <<EOF;
 starburst services manual
 USER related commands
@@ -62,7 +61,7 @@ USER VHOST - Parameters: USER VHOST <vhost>
 Sets a vhost for your account, which is automatically enabled upon identification.
 EOF
 	}
-	elsif ($text =~ /channel acllist$/i) {
+	elsif ($message[1] =~ /channel acllist$/i) {
 		$helpdoc = <<EOF;
 The following flags are specified with a specific username.
 Example: /msg $botnick CHANNEL ACL ADD #starburst bob voice
@@ -76,7 +75,7 @@ autohalfop - automatically halfops all clients that join.
 autovoice - automatically voices all clients that join.
 EOF
 	}
-	elsif ($text =~ /channel$/i) {
+	elsif ($message[1] =~ /channel$/i) {
 		$helpdoc = <<EOF;
 starburst services manual
 CHANNEL related commands

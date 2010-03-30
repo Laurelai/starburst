@@ -120,15 +120,15 @@ sub start {
 	$self->sendraw(':%s EOS', registry_read('irc.hostname'));
 
 	# insert event strings
-	registry_read('core')->event_insert('PING',     '^PING :.*$',             \&proto_ping);
-	registry_read('core')->event_insert('EOS',      '^:.* EOS$',              \&proto_eos);
-	registry_read('core')->event_insert('MESSAGE',  '^:.*? PRIVMSG .*? :.*$', \&proto_privmsg);
-	registry_read('core')->event_insert('NEWUSER',  '^NICK .*$',              \&proto_new_client);
-	registry_read('core')->event_insert('NICK',     '^:.*? NICK .*$',         \&proto_nick_change);
-	registry_read('core')->event_insert('MODE',     '^:.*? MODE .*? :.*$',    \&proto_mode);
-	registry_read('core')->event_insert('JOIN',     '^:.*? JOIN .*$',         \&proto_join);
-	registry_read('core')->event_insert('PART',     '^:.*? PART .*$',         \&proto_part);
-	registry_read('core')->event_insert('QUIT',     '^:.*? QUIT :.*$',        \&proto_quit);
+	registry_read('core')->event_insert('PING',    'raw', '^PING :.*$',             \&proto_ping);
+	registry_read('core')->event_insert('EOS',     'raw', '^:.* EOS$',              \&proto_eos);
+	registry_read('core')->event_insert('MESSAGE', 'raw', '^:.*? PRIVMSG .*? :.*$', \&proto_privmsg);
+	registry_read('core')->event_insert('NEWUSER', 'raw', '^NICK .*$',              \&proto_new_client);
+	registry_read('core')->event_insert('NICK',    'raw', '^:.*? NICK .*$',         \&proto_nick_change);
+	registry_read('core')->event_insert('MODE',    'raw', '^:.*? MODE .*? :.*$',    \&proto_mode);
+	registry_read('core')->event_insert('JOIN',    'raw', '^:.*? JOIN .*$',         \&proto_join);
+	registry_read('core')->event_insert('PART',    'raw', '^:.*? PART .*$',         \&proto_part);
+	registry_read('core')->event_insert('QUIT',    'raw', '^:.*? QUIT :.*$',        \&proto_quit);
 }
 
 sub shutdown {
@@ -178,6 +178,66 @@ sub shutdown {
 	return(0);
 }
 
+sub do_match {
+	my ($self, $buffer, $matchon, $regex) = @_;
+	if ($matchon eq 'raw') { # full string 
+		return(1, ($buffer)) if ($buffer =~ m/$regex/i);
+	}
+	elsif ($matchon eq 'privmsg') {
+		my ($nick, $target, $message);
+		if ($buffer =~ /^:(.*?) PRIVMSG (.*?) :(.*)$/i) {
+			($nick, $target, $message) = ($1, $2, $3);
+			return(1, ($nick, $target, $message)) if ($message =~ m/$regex/i);
+		}
+	}
+	elsif ($matchon eq 'notice') {
+		my ($nick, $target, $message);
+		if ($buffer =~ /^:(.*?) NOTICE (.*?) :(.*)$/i) {
+			($nick, $target, $message) = ($1, $2, $3);
+			return(1, ($nick, $target, $message)) if ($message =~ m/$regex/i);
+		}
+	}
+	elsif ($matchon eq 'join') {
+		my ($nick, $target);
+		if ($buffer =~ /^:(.*?) JOIN (.*)$/i) {
+			($nick, $target) = ($1, $2);
+			return(1, ($nick, $target)) if ($target =~ m/$regex/i);
+			return(1, ($nick, $target)) if ($nick =~ m/$regex/i);
+		}
+	}
+	elsif ($matchon eq 'part') {
+		my ($nick, $target, $reason);
+		if ($buffer =~ /^:(.*?) PART (.*)/i) {
+			($nick, $target) = ($1, $2);
+			my (@temp)       = split(/\s/, $target);
+			if ($#temp) { # if it exists, split out the reason
+				$target = $temp[0];
+				$reason = substr(join(' ', $temp[1..$#temp]), 1);
+			}
+			return(1, ($nick, $target, $reason)) if ($target =~ m/$regex/i);
+			return(1, ($nick, $target, $reason)) if ($nick =~ m/$regex/i);
+		}
+	}
+	elsif ($matchon eq 'quit') {
+		my ($nick, $reason);
+		if ($buffer =~ /^:(.*?) QUIT :(.*)$/i) {
+			($nick, $reason) = ($1, $2);
+			return(1, ($nick, $reason)) if ($reason =~ m/$regex/i);
+			return(1, ($nick, $reason)) if ($nick =~ m/$regex/i);
+		}
+	}
+	elsif ($matchon eq 'mode') {
+		my ($source, $channel, $change, $params);
+		if ($buffer =~ /^:(.*?) MODE #(.*?) (.*?) (.*)$/i) {
+			($source, $channel, $change, $params) = ($1, '#'.$2, $3, $4);
+			return(1, ($source, $channel, $change, $params)) if ($change  =~ m/$regex/i);
+			return(1, ($source, $channel, $change, $params)) if ($channel =~ m/$regex/i);
+			return(1, ($source, $channel, $change, $params)) if ($source  =~ m/$regex/i);
+			return(1, ($source, $channel, $change, $params)) if ($params  =~ m/$regex/i);
+		}
+	}
+}
+	
 sub proto_ping {
 	my ($data) = @_;
 	my $self   = registry_read('backend.irc.handle');

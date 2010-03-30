@@ -59,12 +59,14 @@ sub run {
 		debug($buffer, 5);
 		my @events = registry_tree_single('core.events');
 		foreach my $event (@events) {
-			my $regex = registry_read('core.events.'.$event.'.regex');
-			if ($buffer =~ /$regex/i) {
+			my $regex   = registry_read('core.events.'.$event.'.regex');
+			my $matchon = registry_read('core.events.'.$event.'.matchon');
+			my ($success, @returns) = $irc->do_match($buffer, $matchon, $regex);
+			if ($success) {
 				debug('Event \''.$event.'\' fired', 3);
 				my $routine  = registry_read('core.events.'.$event.'.routine');
 				my $runcount = registry_read('core.events.'.$event.'.runcount');
-				&$routine($buffer);
+				&$routine(@returns);
 				registry_write('core.events.'.$event.'.runcount', $runcount + 1);
 			}
 		}
@@ -81,11 +83,12 @@ sub shutdown {
 }
 
 sub event_insert {
-	my ($self, $event, $regex, $routine) = @_;
-	debug('Creating new event \''.$event.'\'.', 0);
+	my ($self, $event, $matchon, $regex, $routine) = @_;
+	debug('Creating new event \''.$event.'\' matching on \''.$matchon.'\'.', 0);
 	debug('Event regex: '.$regex.'  --  Routine '.$routine, 2);
 	registry_write('core.events.'.$event.'.regex',    $regex);
 	registry_write('core.events.'.$event.'.routine',  $routine);
+	registry_write('core.events.'.$event.'.matchon',  $matchon);
 	registry_write('core.events.'.$event.'.runcount', 0);
 }
 

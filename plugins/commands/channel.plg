@@ -23,7 +23,7 @@ sub new {
 
 sub initialize {
 	my ($self) = @_;
-	registry_read('core')->event_insert('CMD_channel', '^.* PRIVMSG '.registry_read('irc.nickname').' :channel', \&command_channel);
+	registry_read('core')->event_insert('CMD_channel', 'privmsg', '^channel', \&command_channel);
 }
 
 sub shutdown {
@@ -32,12 +32,10 @@ sub shutdown {
 }
 
 sub command_channel {
-	my ($data)        = @_;
+	my ($nick, $target, $message) = @_;
 	my $self          = registry_read('backend.irc.handle');
 	my $botnick       = registry_read('irc.nickname');
 	my $db            = registry_read('backend.db.handle');
-	$data             =~ /^:(.*) PRIVMSG .* :channel(.*)/;
-	my ($nick, $text) = ($1, $2);
 
 }
 

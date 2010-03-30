@@ -23,7 +23,7 @@ sub new {
 
 sub initialize {
 	my ($self) = @_;
-	registry_read('core')->event_insert('CMD_plugin', '^.* PRIVMSG '.registry_read('irc.nickname').' :plugin', \&command_plugin);
+	registry_read('core')->event_insert('CMD_plugin', 'privmsg', '^plugin', \&command_plugin);
 }
 
 sub shutdown {
@@ -33,30 +33,28 @@ sub shutdown {
 }
 
 sub command_plugin {
-	my ($data) = @_;
+	my ($nick, $target, $message) = @_;
 	my $self   = registry_read('backend.irc.handle');
-	$data      =~ /^:(.*) PRIVMSG .* :plugin(.*)/;
-	my ($nick, $text) = ($1, $2);
 	my ($userid)      = $db->user_nick_to_id($nick);
 	my ($hasflag)     = $db->user_flag($userid, 'plugin');
 	if (!$userid || !$hasflag) {
 		$self->client_notice(1, $nick, 'Insufficient permissions');
 		return;
 	}
-	if ($text =~ /^ list$/i) {
+	if ($message =~ /^ list$/i) {
 		my @list = registry_tree_single('plugins.list');
 		foreach my $entry (@list) {
 			$entry =~ s/___/\./g;
 			$self->client_message(1, $nick, $entry);
 		}
 	}
-	if ($text =~ /^ reload (.*)$/i) {
+	if ($message =~ /^ reload (.*)$/i) {
 		plugin_reload($1);
 	}
-	if ($text =~ /^ load (.*)$/i) {
+	if ($message =~ /^ load (.*)$/i) {
 		plugin_load($1);
 	}
-	if ($text =~ /^ unload (.*)$/i) {
+	if ($message =~ /^ unload (.*)$/i) {
 		plugin_unload($1);
 	}
 }

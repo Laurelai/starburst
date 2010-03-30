@@ -23,7 +23,7 @@ sub new {
 
 sub initialize {
 	my ($self) = @_;
-	registry_read('core')->event_insert('CMD_user', '^.* PRIVMSG '.registry_read('irc.nickname').' :user', \&command_user);
+	registry_read('core')->event_insert('CMD_user', 'privmsg', '^user', \&command_user);
 }
 
 sub shutdown {
@@ -34,16 +34,14 @@ sub shutdown {
 }
 
 sub command_user {
-	my ($data)        = @_;
+	my ($nick, $target, $message) = @_;
 	my $self          = registry_read('backend.irc.handle');
 	my $botnick       = registry_read('irc.nickname');
 	my $db            = registry_read('backend.db.handle');
-	$data             =~ /^:(.*) PRIVMSG .* :user(.*)/;
-	my ($nick, $text) = ($1, $2);
-	$text = substr($text, 1) if (substr($text, 0, 1) eq ' ');
-	my @buffer = split(/\s/, $text);
-	if ($buffer[0] eq 'register') {
-		my ($user, $pass) = @buffer[1,2];
+	return if ($target ne $botnick); # no channel messages 
+	my @buffer = split(/\s/, $message);
+	if ($buffer[1] eq 'register') {
+		my ($user, $pass) = @buffer[2,3];
 		my $userid        = $db->user_name_to_id($user);
 		my $loggedin      = $db->user_logged_in($userid);
 		if (!$user || !$pass) {
@@ -64,8 +62,8 @@ sub command_user {
 		$self->client_notice(1, $nick, 'You have been automatically identified as '.$user.'.');
 		$self->client_notice(1, $nick, 'Please note that these services are '.chr(2).'username based'.chr(2).' and not nickname based.') if (registry_read('irc.stupid_idiots'));
 	}
-	elsif ($buffer[0] eq 'identify') {
-		my ($user, $pass) = @buffer[1,2];
+	elsif ($buffer[1] eq 'identify') {
+		my ($user, $pass) = @buffer[2,3];
 		my $loggedin      = $db->user_logged_in($db->user_nick_to_id($nick));
 		if (!$user || !$pass) {
 			$self->client_notice(1, $nick, 'Parameters for IDENTIFY are: USER IDENTIFY <username> <password>');
@@ -97,8 +95,8 @@ sub command_user {
 			return;
 		}
 	}
-	elsif ($buffer[0] eq 'vhost') {
-		my ($vhost) = $buffer[1];
+	elsif ($buffer[1] eq 'vhost') {
+		my ($vhost) = $buffer[2];
 		my $userid        = $db->user_nick_to_id($nick);
 		my $loggedin      = $db->user_logged_in($userid);
 		if (!$vhost) {
@@ -112,7 +110,7 @@ sub command_user {
 		$db->user_vhost_set($userid, $vhost);
 		$self->client_notice(1, $nick, 'VHost set.');
 	}
-	elsif ($buffer[0] eq 'logout') {
+	elsif ($buffer[1] eq 'logout') {
 		my $userid        = $db->user_nick_to_id($nick);
 		my $loggedin      = $db->user_logged_in($userid);
 		if (!$loggedin) {

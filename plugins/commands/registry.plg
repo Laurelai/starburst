@@ -23,7 +23,7 @@ sub new {
 
 sub initialize {
 	my ($self) = @_;
-	registry_read('core')->event_insert('CMD_registry', '^.* PRIVMSG '.registry_read('irc.nickname').' :registry', \&command_registry);
+	registry_read('core')->event_insert('CMD_registry', 'privmsg', '^registry', \&command_registry);
 }
 
 sub shutdown {
@@ -33,28 +33,26 @@ sub shutdown {
 }
 
 sub command_registry {
-	my ($data) = @_;
+	my ($nick, $target, $message) = @_;
 	my $self   = registry_read('backend.irc.handle');
 	my $db     = registry_read('backend.db.handle');
-	$data      =~ /^:(.*) PRIVMSG .* :registry(.*)/;
-	my ($nick, $text) = ($1, $2);
 	my ($userid)      = $db->user_nick_to_id($nick);
 	my ($hasflag)     = $db->user_flag($userid, 'registry');
 	if (!$userid || !$hasflag) {
 		$self->client_notice(1, $nick, 'Insufficient permissions');
 		return;
 	}
-	if ($text =~ /^ view$/i) {
+	if ($message =~ /^ view$/i) {
 		my $buffer = registry_pretty_print();
 		my @temp   = split(/\n/, $buffer);
 		foreach my $line (@temp) {
 			$self->client_message(1, $nick, $line);
 		}
 	}
-	if ($text =~ /^ write (.*?) (.*)$/i) {
+	if ($message =~ /^ write (.*?) (.*)$/i) {
 		registry_write($1, $2);
 	}
-	if ($text =~ /^ read (.*)$/i) {
+	if ($message =~ /^ read (.*)$/i) {
 		$self->client_message(1, $nick, registry_read($1));
 	}
 }
