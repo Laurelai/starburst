@@ -42,17 +42,17 @@ sub command_registry {
 		$self->client_notice(1, $nick, 'Insufficient permissions');
 		return;
 	}
-	if ($message =~ /^ view$/i) {
+	if ($message =~ / view$/i) {
 		my $buffer = registry_pretty_print();
 		my @temp   = split(/\n/, $buffer);
 		foreach my $line (@temp) {
-			$self->client_message(1, $nick, $line);
+			$self->client_message(1, $nick, $line) if ($line);
 		}
 	}
-	if ($message =~ /^ write (.*?) (.*)$/i) {
+	if ($message =~ / write (.*?) (.*)$/i) {
 		registry_write($1, $2);
 	}
-	if ($message =~ /^ read (.*)$/i) {
+	if ($message =~ / read (.*)$/i) {
 		$self->client_message(1, $nick, registry_read($1));
 	}
 }

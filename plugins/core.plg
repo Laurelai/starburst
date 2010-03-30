@@ -74,10 +74,12 @@ sub run {
 }
 
 sub shutdown {
+	debug('Reloading starburst.', 0);
+	plugin_unload(registry_read('backend.db'));
+	plugin_unload(registry_read('backend.irc'));
 	undef(&new);
 	undef(&initialize);
 	undef(&start);
-	undef(&run);
 	undef(&event_insert);
 	undef(&event_delete);
 }

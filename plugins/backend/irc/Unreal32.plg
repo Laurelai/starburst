@@ -64,6 +64,17 @@ sub initialize {
 		if (registry_read('backend.irc.Unreal32.link.usezip') =~ m/^(no|off|disabled|false)$/i);
 
 	registry_write('backend.irc.Unreal32.link.usezip', 0); # not implemented
+	
+	# insert event strings
+	registry_read('core')->event_insert('PING',    'raw', '^PING :.*$',             \&proto_ping);
+	registry_read('core')->event_insert('EOS',     'raw', '^:.* EOS$',              \&proto_eos);
+	registry_read('core')->event_insert('MESSAGE', 'raw', '^:.*? PRIVMSG .*? :.*$', \&proto_privmsg);
+	registry_read('core')->event_insert('NEWUSER', 'raw', '^NICK .*$',              \&proto_new_client);
+	registry_read('core')->event_insert('NICK',    'raw', '^:.*? NICK .*$',         \&proto_nick_change);
+	registry_read('core')->event_insert('MODE',    'raw', '^:.*? MODE .*? :.*$',    \&proto_mode);
+	registry_read('core')->event_insert('JOIN',    'raw', '^:.*? JOIN .*$',         \&proto_join);
+	registry_read('core')->event_insert('PART',    'raw', '^:.*? PART .*$',         \&proto_part);
+	registry_read('core')->event_insert('QUIT',    'raw', '^:.*? QUIT :.*$',        \&proto_quit);
 }
 
 sub start {
@@ -118,17 +129,6 @@ sub start {
 	$self->sendraw('SERVER %s 1 :U2309%s %s', registry_read('irc.hostname'), $linkflags, registry_read('irc.hostname'));
 	$self->sendraw('NETINFO 0 %d 2309 * 0 0 0 :%s', time, registry_read('backend.irc.Unreal32.link.network'));
 	$self->sendraw(':%s EOS', registry_read('irc.hostname'));
-
-	# insert event strings
-	registry_read('core')->event_insert('PING',    'raw', '^PING :.*$',             \&proto_ping);
-	registry_read('core')->event_insert('EOS',     'raw', '^:.* EOS$',              \&proto_eos);
-	registry_read('core')->event_insert('MESSAGE', 'raw', '^:.*? PRIVMSG .*? :.*$', \&proto_privmsg);
-	registry_read('core')->event_insert('NEWUSER', 'raw', '^NICK .*$',              \&proto_new_client);
-	registry_read('core')->event_insert('NICK',    'raw', '^:.*? NICK .*$',         \&proto_nick_change);
-	registry_read('core')->event_insert('MODE',    'raw', '^:.*? MODE .*? :.*$',    \&proto_mode);
-	registry_read('core')->event_insert('JOIN',    'raw', '^:.*? JOIN .*$',         \&proto_join);
-	registry_read('core')->event_insert('PART',    'raw', '^:.*? PART .*$',         \&proto_part);
-	registry_read('core')->event_insert('QUIT',    'raw', '^:.*? QUIT :.*$',        \&proto_quit);
 }
 
 sub shutdown {
@@ -145,6 +145,7 @@ sub shutdown {
 	undef(&new);
 	undef(&initialize);
 	undef(&start);
+	undef(&do_match);
 	undef(&proto_ping);
 	undef(&proto_eos);
 	undef(&proto_privmsg);
@@ -472,6 +473,7 @@ sub sendraw {
 		$data = $deflated;
 	}
 	syswrite($socket, $data);
+	registry_write('backend.irc.Unreal32.bytes.sent', registry_read('backend.irc.Unreal32.bytes.sent') + length($data));
 }
 
 sub readraw {
@@ -492,6 +494,7 @@ sub readraw {
 	else {
 		$data = <$socket>;
 	}
+	registry_write('backend.irc.Unreal32.bytes.read', registry_read('backend.irc.Unreal32.bytes.read') + length($data));
 	$data =~ s/(\r|\n)//g;
 	return($data);
 }

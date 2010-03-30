@@ -53,7 +53,7 @@ sub command_user {
 			return;
 		}
 		if ($loggedin) {
-			$self->client_notice(1, $nick, 'You are already logged in as '.$loggedin.'.');
+			$self->client_notice(1, $nick, 'You are already identified.');
 			return;
 		}
 		my $uid = $db->user_create($user, $pass);
@@ -70,7 +70,7 @@ sub command_user {
 			return;
 		}
 		if ($loggedin) {
-			$self->client_notice(1, $nick, 'You are already logged in as '.$loggedin.'.');
+			$self->client_notice(1, $nick, 'You are already identified.');
 			return;
 		}
 		undef($loggedin);

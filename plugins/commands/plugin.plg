@@ -35,26 +35,27 @@ sub shutdown {
 sub command_plugin {
 	my ($nick, $target, $message) = @_;
 	my $self   = registry_read('backend.irc.handle');
+	my $db     = registry_read('backend.db.handle');
 	my ($userid)      = $db->user_nick_to_id($nick);
 	my ($hasflag)     = $db->user_flag($userid, 'plugin');
 	if (!$userid || !$hasflag) {
 		$self->client_notice(1, $nick, 'Insufficient permissions');
 		return;
 	}
-	if ($message =~ /^ list$/i) {
+	if ($message =~ / list$/i) {
 		my @list = registry_tree_single('plugins.list');
 		foreach my $entry (@list) {
 			$entry =~ s/___/\./g;
 			$self->client_message(1, $nick, $entry);
 		}
 	}
-	if ($message =~ /^ reload (.*)$/i) {
+	if ($message =~ / reload (.*)$/i) {
 		plugin_reload($1);
 	}
-	if ($message =~ /^ load (.*)$/i) {
+	if ($message =~ / load (.*)$/i) {
 		plugin_load($1);
 	}
-	if ($message =~ /^ unload (.*)$/i) {
+	if ($message =~ / unload (.*)$/i) {
 		plugin_unload($1);
 	}
 }

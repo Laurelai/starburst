@@ -16,14 +16,18 @@ registry_tree_single
 registry_pretty_print
 registry_pretty_print_int
 registry_pretty_print_recurse_errors
+registry_size
 
 gen_salt
 gen_hash
+
+seconds_lenstr
+format_bytes
 ];
 
 use Exporter;
 use Azusa::Configuration;
-use POSIX qw[strftime];
+use POSIX  qw[strftime];
 our @ISA = qw[Exporter];
 our %registry;
 our $error;
@@ -154,6 +158,8 @@ sub plugin_load    {
 
 sub plugin_unload {
 	my ($plugin_name) = @_;
+	return if (!registry_read('plugins.loaded.'.$plugin_name.'.handle'));
+	no warnings 'redefine'; # this is kinda messy. sometimes redefines.
 	debug('Unloading plugin '.$plugin_name.'.', 0);
 	registry_read('plugins.loaded.'.$plugin_name.'.handle')->shutdown();
 	my $conv_realname = $plugin_name; $conv_realname =~ s/\./___/g;
@@ -239,6 +245,27 @@ sub gen_hash {
 	return($md5->hexdigest);
 }
 
+sub seconds_lenstr { 
+	my ($seconds) = @_;
+	my @parts = gmtime($seconds);
+	my ($str);
+	$str .= sprintf("%d days, ",    $parts[7]) if ($parts[7]);
+	$str .= sprintf("%d hours, ",   $parts[2]) if ($parts[2]);
+	$str .= sprintf("%d minutes, ", $parts[1]) if ($parts[1]);
+	$str .= sprintf("%d seconds",   $parts[0]) if ($parts[0]);
+	return($str);
+}
+
+sub format_bytes { 
+	my ($bytes) = @_;
+	return(Number::Bytes::Human::format_bytes($bytes));
+}
+	
+
+sub registry_size {
+	return(keys(%registry));
+}
+
 sub registry_pretty_print { registry_pretty_print_int(\%CommonRoutines::registry); }
 
 # The following was kindly stolen from a google search
@@ -300,6 +327,273 @@ sub registry_pretty_print_recurse_errors {
 $str
 }
 
+package Number::Bytes::Human;
+
+use strict;
+use warnings;
+
+our $VERSION = '0.07';
+
+require Exporter;
+our @ISA = qw(Exporter);
+our @EXPORT_OK = qw(format_bytes);
+
+require POSIX;
+use Carp qw(croak carp);
+
+#my $DEFAULT_BLOCK = 1024;
+#my $DEFAULT_ZERO = '0';
+#my $DEFAULT_ROUND_STYLE = 'ceil';
+my %DEFAULT_SUFFIXES = (
+  1024 => ['', 'K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y'],
+  1000 => ['', 'k', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y'],
+  1024000 => ['', 'M', 'T', 'E', 'Y'],
+  si_1024 => ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB'],
+  si_1000 => ['B', 'kB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'],
+);
+my @DEFAULT_PREFIXES = @{$DEFAULT_SUFFIXES{1024}};
+
+sub _default_suffixes {
+  my $set = shift || 1024;
+  if (exists $DEFAULT_SUFFIXES{$set}) {
+    return @{$DEFAULT_SUFFIXES{$set}} if wantarray;
+    return [ @{$DEFAULT_SUFFIXES{$set}} ];
+  }
+  croak "unknown suffix set '$set'";
+}
+
+my %ROUND_FUNCTIONS = (
+  ceil => \&POSIX::ceil,
+  floor => \&POSIX::floor,
+  #round => sub { shift }, # FIXME
+  #trunc => sub { int shift } # FIXME
+
+  # what about 'ceiling'?
+);
+
+sub _round_function {
+  my $style = shift;
+  if (exists $ROUND_FUNCTIONS{$style}) {
+    return $ROUND_FUNCTIONS{$style}
+  }
+  croak "unknown round style '$style'";
+}
+
+sub _parse_args {
+  my $seed = shift;
+  my %args;
+
+  my %options;
+  unless (defined $seed) { # use defaults
+    $options{BLOCK} = 1024;
+    $options{ROUND_STYLE} = 'ceil';
+    $options{ROUND_FUNCTION} = _round_function($options{ROUND_STYLE});
+    $options{ZERO} = '0';
+    #$options{SUFFIXES} = # deferred to the last minute when we know BLOCK, seek [**]
+  } 
+  # else { %options = %$seed } # this is set if @_!=0, down below
+
+  if (@_==0) { # quick return for default values (no customized args)
+    return (defined $seed) ? $seed : \%options;
+  } elsif (@_==1 && ref $_[0]) { # \%args
+    %args = %{$_[0]};
+  } else { # arg1 => $val1, arg2 => $val2
+    %args = @_;
+  }
+
+  # this is done here so this assignment/copy doesn't happen if @_==0
+  %options = %$seed unless %options; 
+
+# block | block_size | base | bs => 1024 | 1000
+# block_1024 | base_1024 | 1024 => $true
+# block_1000 | base_1000 | 1024 => $true
+  if ($args{block} ||
+      $args{block_size} ||
+      $args{base} ||
+      $args{bs}
+    ) {
+    my $block = $args{block} ||
+                $args{block_size} ||
+                $args{base} ||
+                $args{bs};
+    unless ($block==1000 || $block==1024 || $block==1_024_000) {
+      croak "invalid base: $block (should be 1024, 1000 or 1024000)";
+    }
+    $options{BLOCK} = $block;
+    
+  } elsif ($args{block_1024} ||
+           $args{base_1024}  ||
+           $args{1024}) {
+
+    $options{BLOCK} = 1024;
+  } elsif ($args{block_1000} ||
+           $args{base_1000}  ||
+           $args{1000}) {
+
+    $options{BLOCK} = 1000;
+  }
+
+# round_function => \&
+# round_style => 'ceil' | 'floor' | 'round' | 'trunc'
+  if ($args{round_function}) {
+    unless (ref $args{round_function} eq 'CODE') {
+      croak "round function ($args{round_function}) should be a code ref";
+    }
+    $options{ROUND_FUNCTION} = $args{round_function};
+    $options{ROUND_STYLE} = $args{round_style} || 'unknown';
+  } elsif ($args{round_style}) {
+    $options{ROUND_FUNCTION} = _round_function($args{round_style});
+    $options{ROUND_STYLE} = $args{round_style};
+  }
+
+# suffixes => 1024 | 1000 | si_1024 | si_1000 | 1024000 | \@
+  if ($args{suffixes}) {
+    if (ref $args{suffixes} eq 'ARRAY') {
+      $options{SUFFIXES} = $args{suffixes};
+    } elsif ($args{suffixes} =~ /^(si_)?(1000|1024)$/) {
+      $options{SUFFIXES} = _default_suffixes($args{suffixes});
+    } else {
+      croak "suffixes ($args{suffixes}) should be 1024, 1000, si_1024, si_1000, 1024000 or an array ref";
+    }
+  } elsif ($args{si}) {
+    my $set = ($options{BLOCK}==1024) ? 'si_1024' : 'si_1000';
+    $options{SUFFIXES} = _default_suffixes($set);
+  } elsif (defined $args{unit}) {
+    my $suff = $args{unit};
+    $options{SUFFIXES} = [ map  { "$_$suff" } @DEFAULT_PREFIXES ];
+  }
+
+# zero => undef | string
+  if (exists $args{zero}) {
+    $options{ZERO} = $args{zero};
+    if (defined $options{ZERO}) {
+      $options{ZERO} =~ s/%S/$options{SUFFIXES}->[0]/g 
+    }
+  }
+
+# quiet => 1
+  if ($args{quiet}) {
+    $options{QUIET} = 1;
+  }
+
+  if (defined $seed) {
+    %$seed = %options;
+    return $seed;
+  }
+  return \%options
+}
+
+# NOTE. _format_bytes() SHOULD not change $options - NEVER.
+
+sub _format_bytes {
+  my $bytes = shift;
+  return undef unless defined $bytes;
+  my $options = shift;
+  my %options = %$options;
+
+  local *human_round = $options{ROUND_FUNCTION};
+
+  return $options{ZERO} if ($bytes==0 && defined $options{ZERO});
+
+  my $block = $options{BLOCK};
+
+  # if a suffix set was not specified, pick a default [**]
+  my @suffixes = $options{SUFFIXES} ? @{$options{SUFFIXES}} : _default_suffixes($block);
+
+  # WHAT ABOUT NEGATIVE NUMBERS: -1K ?
+  my $sign = '';
+  if ($bytes<0) {
+     $bytes = -$bytes;
+     $sign = '-';
+  }
+  return $sign . human_round($bytes) . $suffixes[0] if $bytes<$block;
+
+#  return "$sign$bytes" if $bytes<$block;
+
+  my $x = $bytes;
+  my $suffix;
+  foreach (@suffixes) {
+    $suffix = $_, last if human_round($x) < $block;
+    $x /= $block;
+  }
+  unless (defined $suffix) { # number >= $block*($block**@suffixes) [>= 1E30, that's huge!]
+      unless ($options{QUIET}) {
+        my $pow = @suffixes+1; 
+        carp "number too large (>= $block**$pow)"
+      }
+      $suffix = $suffixes[-1];
+      $x *= $block;
+  }
+  # OPTION: return "Inf"
+
+  my $num;
+  if ($x < 10.0) {
+    $num = sprintf("%.1f", human_round($x*10)/10); 
+  } else {
+    $num = sprintf("%d", human_round($x));
+  }
+
+  "$sign$num$suffix"
+
+}
+
+# convert byte count (file size) to human readable format
+sub format_bytes {
+  my $bytes = shift;
+  my $options = _parse_args(undef, @_);
+  #use YAML; print Dump $options;
+  return _format_bytes($bytes, $options);
+}
+
+### the OO way
+
+# new()
+sub new {
+  my $proto = shift;
+  my $class = ref $proto || $proto;
+  my $opts = _parse_args(undef, @_);
+  return bless $opts, $class;
+}
+
+# set_options()
+sub set_options {
+  my $self = shift;
+  return $self->_parse_args(@_);
+}
+
+# format()
+sub format {
+  my $self = shift;
+  my $bytes = shift;
+  return _format_bytes($bytes, $self);
+}
+
+
+# the solution by COG in Filesys::DiskUsage 
+# convert size to human readable format
+#sub _convert {
+#  defined (my $size = shift) || return undef;
+#  my $config = {@_};
+#  $config->{human} || return $size;
+#  my $block = $config->{'Human-readable'} ? 1000 : 1024;
+#  my @args = qw/B K M G/;
+#
+#  while (@args && $size > $block) {
+#    shift @args;
+#    $size /= $block;
+#  }
+#
+#  if ($config->{'truncate-readable'} > 0) {
+#    $size = sprintf("%.$config->{'truncate-readable'}f",$size);
+#  }
+#
+#  "$size$args[0]";
+#}
+#
+# not exact: 1024 => 1024B instead of 1K
+# not nicely formatted => 1.00 instead of 1K
+
+1;
 
 
 #! /usr/bin/false
@@ -589,3 +883,5 @@ II,$b,$c,$d,$a,$_[13],21,0xeb86d391,/* 64 */
 
 
 1;
+
+

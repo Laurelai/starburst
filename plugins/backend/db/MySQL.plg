@@ -411,6 +411,20 @@ sub user_logged_in {
 	return($logged_in);
 }
 
+sub user_flag {
+	my ($self, $userid, $flag) = @_;
+	my $sql                    = registry_read('backend.db.MySQL.db_handle');
+	my ($hasflag)              = $self->sql_cache('permissions:flag='.$flag.':id');
+	if (!$hasflag) {
+		($hasflag)         = $sql->query('SELECT id FROM permissions WHERE id = %d AND (flag = \'all\' OR flag = %s)', $userid, $flag);
+		$self->sql_cachemiss() if ($hasflag);
+	}
+	else {
+		$self->sql_cachehit() if (!$hasflag);
+	}
+	return($hasflag);
+}
+
 
 # User utilities. These set values.
 
@@ -503,6 +517,10 @@ sub user_vhost_set {
 sub sql_cache {
 	my ($self, $value) = @_;
 	return($self->{sql_cache}{$value});
+	if ((time - registry_read('backend.db.MySQL.cache.lastflush')) > registry_read('backend.db.MySQL.cache_flush_interval')) {
+		registry_write('backend.db.MySQL.cache.lastflush', time);
+		undef($self->{sql_cache});
+	}
 }
 
 sub sql_flushcache {

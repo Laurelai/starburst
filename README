@@ -1,1 +1,1 @@
-Please check out a copy of Azusa before attempting to use Starburst, as the MySQL plugin requires it. 
+Starburst requires a checkout of the Azusa library for it to run. At the very least, it requires Azusa::Configuration, and Azusa::MySQL for the included (and default) MySQL DB backend.
