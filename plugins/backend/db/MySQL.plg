@@ -599,6 +599,9 @@ sub client_rename {
 	debug('client '.$cid.' (oldnick '.$oldnick.') changing nick to '.$newnick, 4);
 	$sql->query('UPDATE clients SET nick = %s WHERE cid = %d', $cid);
 	$self->sql_insertcache('clients:cid='.$cid.':nick', $newnick);
+	$self->sql_insertcache('clients:nick='.$newnick.':cid', $cid);
+	
+	$self->sql_deletecache('clients:nick='.$oldnick.':cid');
 }
 
 # User utilities. These return values.
