@@ -26,6 +26,8 @@ sub initialize {
 	registry_read('core')->event_insert(2, 'CMD_plugin', 'privmsg', '^plugin', \&command_plugin);
 }
 
+sub start { }
+
 sub shutdown {
 	undef(&new);
 	undef(&initialize);
@@ -51,6 +53,9 @@ sub command_plugin {
 	}
 	if ($message =~ / reload (.*)$/i) {
 		plugin_reload($1);
+	}
+	if ($message =~ / start (.*)$/i) {
+		registry_read('plugins.loaded.'.$1.'.handle')->start;
 	}
 	if ($message =~ / load (.*)$/i) {
 		plugin_load($1);

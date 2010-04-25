@@ -26,6 +26,9 @@ sub initialize {
 
 }
 
+sub start { }
+
+
 sub shutdown {
 	undef(&new);
 	undef(&initialize);

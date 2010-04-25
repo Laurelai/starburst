@@ -61,6 +61,14 @@ sub start {
 sub run {
 	my ($self) = @_;
 	my $irc    = registry_read('backend.irc.handle');
+	
+	# call the startup routines here
+      	my @list = registry_tree_single('bots.list');
+      	foreach my $entry (@list) {
+		registry_read('plugins.loaded.'.registry_read('bots.list.'.$entry).'.handle')->start();
+	}
+
+
 	while (1) {
 		my $buffer = $irc->readraw();
 		debug($buffer, 5);

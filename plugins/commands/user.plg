@@ -26,6 +26,9 @@ sub initialize {
 	registry_read('core')->event_insert(2, 'CMD_user', 'privmsg', '^user', \&command_user);
 }
 
+sub start { }
+
+
 sub shutdown {
 	undef(&new);
 	undef(&initialize);

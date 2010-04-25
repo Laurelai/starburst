@@ -26,6 +26,8 @@ sub initialize {
 	registry_read('core')->event_insert(2, 'CMD_help', 'privmsg', '^help', \&command_help);
 }
 
+sub start { }
+
 sub shutdown {
 	my ($self) = @_;
 	undef(&command_help);

@@ -27,6 +27,8 @@ sub initialize {
 	registry_read('core')->event_insert(2, 'CHANNEL_automode', 'join',    '.*',       \&channel_automode);
 }
 
+sub start { }
+
 sub shutdown {
 	undef(&new);
 	undef(&initialize);

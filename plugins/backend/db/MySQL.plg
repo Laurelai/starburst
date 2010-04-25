@@ -215,6 +215,22 @@ sub int_client_new {
 	return(registry_read('backend.db.MySQL.db_handle')->last_insert_id);
 }
 
+sub int_client_join_registered_channels {
+	my ($self, $cid) = @_;
+	my $sql          = registry_read('backend.db.MySQL.db_handle');
+	my $irc          = registry_read('backend.irc.handle');
+	my (@channels)   = $sql->query('SELECT channel FROM registered_channels');
+	foreach my $channel (@channels) {
+		$irc->client_join($cid, $channel);
+		$irc->client_mode($cid, $channel, '+'.registry_read('commands.channel.register.required_flag').' '.$self->int_client_nick($cid));
+	}
+}
+
+sub int_client_remove {
+	my ($self, $cid) = @_;
+	registry_read('backend.db.MySQL.db_handle')->query('DELETE FROM internal_clients WHERE cid = %d', $cid);
+}
+
 sub int_client_nick {
 	my ($self, $cid) = @_;
 	my $sql          = registry_read('backend.db.MySQL.db_handle');
@@ -580,6 +596,7 @@ sub client_rename {
 	my ($self, $oldnick, $newnick) = @_;
 	my $sql                        = registry_read('backend.db.MySQL.db_handle');
 	my $cid                        = $self->client_nick_to_id($oldnick);
+	debug('client '.$cid.' (oldnick '.$oldnick.') changing nick to '.$newnick, 4);
 	$sql->query('UPDATE clients SET nick = %s WHERE cid = %d', $cid);
 	$self->sql_insertcache('clients:cid='.$cid.':nick', $newnick);
 }

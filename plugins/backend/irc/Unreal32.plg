@@ -253,6 +253,7 @@ sub proto_eos {
 	my $self   = registry_read('backend.irc.handle');
 	debug('IRCd sent synch', 1);
 	# registry_read('core')->join_registered_channels();
+	registry_read('backend.db.handle')->int_client_join_registered_channels(1);
 }
 
 sub proto_privmsg {
@@ -366,6 +367,13 @@ sub client_new {
 			$gecos);
 	$self->client_mode($cid, '+Sq');
 	return($cid);
+}
+
+sub client_quit {
+	my ($self, $cid, $message) = @_;
+	my $nick                   = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s QUIT :%s', $nick, $message);
+	registry_read('backend.db.handle')->int_client_remove($cid);
 }
 
 sub client_join {

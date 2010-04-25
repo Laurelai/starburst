@@ -26,6 +26,9 @@ sub initialize {
 	registry_read('core')->event_insert(2, 'CMD_stats', 'privmsg', '^stats', \&command_stats);
 }
 
+sub start { }
+
+
 sub shutdown {
 	undef(&new);
 	undef(&initialize);
@@ -42,25 +45,30 @@ sub command_stats {
 		$self->client_notice(1, $nick, 'Insufficient permissions');
 		return;
 	}
-	$self->client_message(1, $nick, '---------------');
-	$self->client_message(1, $nick, 'starburst stats');
-	$self->client_message(1, $nick, '---------------');
-	$self->client_message(1, $nick, 'uptime: '.seconds_lenstr((time - registry_read('plugins.loaded.core.time'))));
+	$self->client_message(1, $target, '---------------');
+	$self->client_message(1, $target, 'starburst stats');
+	$self->client_message(1, $target, '---------------');
+	$self->client_message(1, $target, 'uptime: '.seconds_lenstr((time - registry_read('plugins.loaded.core.time'))));
+	if (registry_read('starburst.profile_all') || registry_read('starburst.profile_events')) {
+		$self->client_message(1, $target, 'average event timing: '.sprintf('%.4f', registry_read('profile.events.averagetime')).' seconds');
+		$self->client_message(1, $target, 'shortest event: '.registry_read('profile.events.shortest_time_name').' (took '.sprintf('%.4f', registry_read('profile.events.shortest_time')).' seconds)');
+		$self->client_message(1, $target, 'longest event: '.registry_read('profile.events.longest_time_name').' (took '.sprintf('%.4f', registry_read('profile.events.longest_time')).' seconds)');
+	}
 	if (registry_read('plugins.loaded.backend.db.MySQL.handle')) { # MySQL plugin loaded
-		$self->client_message(1, $nick, '------------------------------');
-		$self->client_message(1, $nick, 'plugin stats: backend.db.MySQL');
-		$self->client_message(1, $nick, '------------------------------');
-		$self->client_message(1, $nick, 'Queries executed: '.registry_read('backend.db.MySQL.db_handle')->{query_count});
-		$self->client_message(1, $nick, 'Cache hits: '.registry_read('backend.db.MySQL.cache.hit'));
-		$self->client_message(1, $nick, 'Cache misses: '.registry_read('backend.db.MySQL.cache.miss'));
-		$self->client_message(1, $nick, 'Cache efficiency: '.sprintf('%.2f', ((100 / (registry_read('backend.db.MySQL.cache.miss') + registry_read('backend.db.MySQL.cache.hit'))) * registry_read('backend.db.MySQL.cache.hit'))).'%');
+		$self->client_message(1, $target, '------------------------------');
+		$self->client_message(1, $target, 'plugin stats: backend.db.MySQL');
+		$self->client_message(1, $target, '------------------------------');
+		$self->client_message(1, $target, 'Queries executed: '.registry_read('backend.db.MySQL.db_handle')->{query_count});
+		$self->client_message(1, $target, 'Cache hits: '.registry_read('backend.db.MySQL.cache.hit'));
+		$self->client_message(1, $target, 'Cache misses: '.registry_read('backend.db.MySQL.cache.miss'));
+		$self->client_message(1, $target, 'Cache efficiency: '.sprintf('%.2f', ((100 / (registry_read('backend.db.MySQL.cache.miss') + registry_read('backend.db.MySQL.cache.hit'))) * registry_read('backend.db.MySQL.cache.hit'))).'%');
 	}
 	if (registry_read('plugins.loaded.backend.irc.Unreal32.handle')) {
-		$self->client_message(1, $nick, '----------------------------------');
-		$self->client_message(1, $nick, 'plugin stats: backend.irc.Unreal32');
-		$self->client_message(1, $nick, '----------------------------------');
-		$self->client_message(1, $nick, 'Data in: '.format_bytes(registry_read('backend.irc.Unreal32.bytes.read')));
-		$self->client_message(1, $nick, 'Data out: '.format_bytes(registry_read('backend.irc.Unreal32.bytes.sent')));
+		$self->client_message(1, $target, '----------------------------------');
+		$self->client_message(1, $target, 'plugin stats: backend.irc.Unreal32');
+		$self->client_message(1, $target, '----------------------------------');
+		$self->client_message(1, $target, 'Data in: '.format_bytes(registry_read('backend.irc.Unreal32.bytes.read')));
+		$self->client_message(1, $target, 'Data out: '.format_bytes(registry_read('backend.irc.Unreal32.bytes.sent')));
 	}
 }
 
