@@ -23,7 +23,8 @@ sub new {
 
 sub initialize {
 	my ($self) = @_;
-	registry_read('core')->event_insert('CMD_channel', 'privmsg', '^channel', \&command_channel);
+	registry_read('core')->event_insert(2, 'CMD_channel',      'privmsg', '^channel', \&command_channel);
+	registry_read('core')->event_insert(2, 'CHANNEL_automode', 'join',    '.*',       \&channel_automode);
 }
 
 sub shutdown {
@@ -31,11 +32,167 @@ sub shutdown {
 	undef(&initialize);
 }
 
+sub channel_automode {
+	my ($nick, $target) = @_;
+	my $self          = registry_read('backend.irc.handle');
+	my $botnick       = registry_read('irc.nickname');
+	my $db            = registry_read('backend.db.handle');
+	my $userid        = $db->user_nick_to_id($nick);
+	my $loggedin      = $db->user_logged_in($userid);
+	my $clientid      = $db->client_nick_to_id($nick);
+	my $rcid          = $db->channel_reg_name_to_id($target);
+	$self->client_mode(1, $target, '+o '.$nick) if ($db->channel_permissions($rcid, 0, 'op', 1));
+	$self->client_mode(1, $target, '+v '.$nick) if ($db->channel_permissions($rcid, 0, 'voice', 1));
+	$self->client_mode(1, $target, '+h '.$nick) if ($db->channel_permissions($rcid, 0, 'halfop', 1));
+	return if (!$loggedin || !$rcid);
+	$self->client_mode(1, $target, '+o '.$nick) if ($db->channel_permissions($rcid, $userid, 'op', 1));
+	$self->client_mode(1, $target, '+v '.$nick) if ($db->channel_permissions($rcid, $userid, 'voice', 1));
+	$self->client_mode(1, $target, '+h '.$nick) if ($db->channel_permissions($rcid, $userid, 'halfop', 1));
+}
+
 sub command_channel {
 	my ($nick, $target, $message) = @_;
 	my $self          = registry_read('backend.irc.handle');
 	my $botnick       = registry_read('irc.nickname');
 	my $db            = registry_read('backend.db.handle');
+	my @buffer = split(/\s/, $message);
+	my $userid        = $db->user_nick_to_id($nick);
+	my $loggedin      = $db->user_logged_in($userid);
+	my $clientid      = $db->client_nick_to_id($nick);
+	return if ($target ne $botnick || !$loggedin);
+	if (lc($buffer[1]) eq 'register') {
+		my ($channel) = $buffer[2];
+		my $cid       = $db->channel_name_to_id($channel);
+		if (!$channel) {
+			$self->client_notice(1, $nick, 'Parameters for REGISTER are: CHANNEL REGISTER <channel>');
+			return;
+		}
+		if ($db->channel_registered($channel)) {
+			$self->client_notice(1, $nick, 'Channel is already registered.');
+			return;
+		}
+		if (!$db->channel_client_mode($cid, $clientid, registry_read('commands.channel.register.required_flag'))) {
+			$self->client_notice(1, $nick, 'You have insufficent channel access to register.');
+			return;
+		}
+		my ($rcid) = $db->channel_register($channel, $userid);
+		$db->channel_permissions_add($rcid, $userid, 'all');
+		$db->channel_permissions_add($rcid, $userid, 'op');
+		$db->channel_modelock($rcid, 'nt');
+		$self->client_notice(1, $nick, 'Channel successfully registered.');
+		$self->client_join(1, $channel);
+		$self->client_mode(1, $channel, '+o '.$botnick);
+	}
+	elsif (lc($buffer[1]) eq 'modelock') {
+		my ($function, $channel, $modes) = @buffer[2..4];
+		my ($rcid)            = $db->channel_reg_name_to_id($channel);
+		if (!$channel || !$modes) {
+			$self->client_notice(1, $nick, 'Parameters for MODELOCK are: CHANNEL MODELOCK <SET/VIEW> <channel> [+/-modes]');
+			return;
+		}
+		if (!$rcid) {
+			$self->client_notice(1, $nick, 'This channel is not registered.');
+			return;
+		}
+		if (!$db->channel_permissions($rcid, $userid, 'modelock')) {
+			$self->client_notice(1, $nick, 'You have insufficient channel permissions to change the modelock.');
+			return;
+		}
+		if (lc($function) eq 'view') {
+			$self->client_notice(1, $nick, 'Modelock for '.$channel.': '.$db->channel_modelock_get($rcid));
+			return;
+		}
+		elsif (lc($function) eq 'set') {
+			$db->channel_modelock($rcid, $modes);
+			$self->client_notice(1, $nick, 'Modelock set to '.$modes);
+			return;
+		}
+		else {
+			$self->client_notice(1, $nick, 'Unknown MODELOCK function.');
+			return;
+		}
+	}
+	elsif (lc($buffer[1]) eq 'acl') {
+		my ($function, $channel, $flag, $usernick) = @buffer[2..5];
+		my ($rcid)                                 = $db->channel_reg_name_to_id($channel);
+		if (!$function) {
+			$self->client_notice(1, $nick, 'Parameters for ACL are: CHANNEL ACL <SET/DEL/VIEW> <channel> <flag> [username/nickname]') if ($function ne 'acl' &&  (!$channel || !$flag));
+			return;
+		}
+		if (!$rcid) {
+			$self->client_notice(1, $nick, 'This channel is not registered.');
+			return;
+		}
+		if (!$db->channel_permissions($rcid, $userid, 'acl')) {
+			$self->client_notice(1, $nick, 'You have insufficient channel permissions to change the ACL.');
+			return;
+		}
+		if (lc($function) eq 'view') {
+			my (@acl_array) = $db->channel_permissions_all($rcid);
+			$self->client_notice(1, $nick, $channel.' ACL LIST');
+			foreach my $acl (@acl_array) {
+				if (!$acl->[0]) {
+					$acl->[0] = $channel;
+				}
+				else {
+					$acl->[0] = 'username '.$db->user_id_to_name($acl->[0]);
+				}
+				$self->client_notice(1, $nick, $acl->[0].'  =>  '.$acl->[1]);
+			}
+		}
+		elsif (lc($function) eq 'set') {
+			$usernick = "0" if (!$usernick); # string
+			my $uid;
+			if ($usernick ne "0") {
+				$uid   = $db->user_name_to_id($usernick);
+				if (!$uid) {
+					$uid = $db->user_nick_to_id($usernick);
+				}
+				if (!$uid) {
+					$self->client_notice(1, $nick, 'No such username nor nickname identified to that username.');
+					return;
+				}
+			}
+			$usernick = $uid if ($usernick ne "0");
+			$db->channel_permissions_add($rcid, $usernick, $flag);
+			$self->client_notice(1, $nick, 'Flag '.$flag.' added to '.$channel.' ('.($usernick ne "0" ? "username ".$db->user_id_to_name($usernick) : "global").')');
+		}
+		elsif (lc($function) eq 'del') {
+			$usernick = "0" if (!$usernick); # string
+			my $uid;
+			if ($usernick ne "0") {
+				$uid   = $db->user_name_to_id($usernick);
+				if (!$uid) {
+					$uid = $db->user_nick_to_id($usernick);
+				}
+				if (!$uid) {
+					$self->client_notice(1, $nick, 'No such username nor nickname identified to that username.');
+					return;
+				}
+			}
+			$usernick = $uid if ($usernick ne "0");
+			$db->channel_permissions_del($rcid, $usernick, $flag);
+			$self->client_notice(1, $nick, 'Flag '.$flag.' deleted from '.$channel.' ('.($usernick ne "0" ? "username ".$db->user_id_to_name($usernick) : "global").')');
+		}
+		else {
+			$self->client_notice(1, $nick, 'Unknown ACL function.');
+			return;
+		}
+	}
+	elsif (lc($buffer[1]) eq 'drop') {
+		my ($channel, $userpass) = @buffer[2,3];
+		my ($rcid)               = $db->channel_reg_name_to_id($channel);
+		if (!$channel || !$userpass) {
+			$self->client_notice(1, $nick, 'Parameters for DROP are: DROP <channel> <user password>');
+			return;
+		}
+		if (!$db->user_password($userid, $userpass)) {
+			$self->client_notice(1, $nick, 'Incorrect user password.');
+			return;
+		}
+		$db->channel_drop($rcid);
+		$self->client_notice(1, $nick, 'Unregistered channel '.$channel.'.');
+	}
 
 }
 

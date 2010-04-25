@@ -23,7 +23,7 @@ sub new {
 
 sub initialize {
 	my ($self) = @_;
-	registry_read('core')->event_insert('CMD_registry', 'privmsg', '^registry', \&command_registry);
+	registry_read('core')->event_insert(2, 'CMD_registry', 'privmsg', '^registry', \&command_registry);
 }
 
 sub shutdown {

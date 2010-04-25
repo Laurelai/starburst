@@ -64,17 +64,18 @@ sub initialize {
 		if (registry_read('backend.irc.Unreal32.link.usezip') =~ m/^(no|off|disabled|false)$/i);
 
 	registry_write('backend.irc.Unreal32.link.usezip', 0); # not implemented
-	
+
 	# insert event strings
-	registry_read('core')->event_insert('PING',    'raw', '^PING :.*$',             \&proto_ping);
-	registry_read('core')->event_insert('EOS',     'raw', '^:.* EOS$',              \&proto_eos);
-	registry_read('core')->event_insert('MESSAGE', 'raw', '^:.*? PRIVMSG .*? :.*$', \&proto_privmsg);
-	registry_read('core')->event_insert('NEWUSER', 'raw', '^NICK .*$',              \&proto_new_client);
-	registry_read('core')->event_insert('NICK',    'raw', '^:.*? NICK .*$',         \&proto_nick_change);
-	registry_read('core')->event_insert('MODE',    'raw', '^:.*? MODE .*? :.*$',    \&proto_mode);
-	registry_read('core')->event_insert('JOIN',    'raw', '^:.*? JOIN .*$',         \&proto_join);
-	registry_read('core')->event_insert('PART',    'raw', '^:.*? PART .*$',         \&proto_part);
-	registry_read('core')->event_insert('QUIT',    'raw', '^:.*? QUIT :.*$',        \&proto_quit);
+	registry_read('core')->event_insert(1, 'PING',    'raw', '^PING :.*$',             \&proto_ping);
+	registry_read('core')->event_insert(1, 'EOS',     'raw', '^:.* EOS$',              \&proto_eos);
+	registry_read('core')->event_insert(1, 'MESSAGE', 'raw', '^:.*? PRIVMSG .*? :.*$', \&proto_privmsg);
+	registry_read('core')->event_insert(1, 'NEWUSER', 'raw', '^NICK .*$',              \&proto_new_client);
+	registry_read('core')->event_insert(1, 'NICK',    'raw', '^:.*? NICK .*$',         \&proto_nick_change);
+	registry_read('core')->event_insert(1, 'CLMODE',  'raw', '^:.*? MODE .*? :.*$',    \&proto_client_mode);
+	registry_read('core')->event_insert(1, 'CHMODE',  'raw', '^:.*? MODE .*? .*$', \&proto_channel_mode);
+	registry_read('core')->event_insert(1, 'JOIN',    'raw', '^:.*? JOIN .*$',         \&proto_join);
+	registry_read('core')->event_insert(1, 'PART',    'raw', '^:.*? PART .*$',         \&proto_part);
+	registry_read('core')->event_insert(1, 'QUIT',    'raw', '^:.*? QUIT :.*$',        \&proto_quit);
 }
 
 sub start {
@@ -132,15 +133,15 @@ sub start {
 }
 
 sub shutdown {
-	registry_read('core')->event_delete('PING');
-	registry_read('core')->event_delete('EOS');
-	registry_read('core')->event_delete('MESSAGE');
-	registry_read('core')->event_delete('NEWUSER');
-	registry_read('core')->event_delete('NICK');
-	registry_read('core')->event_delete('MODE');
-	registry_read('core')->event_delete('JOIN');
-	registry_read('core')->event_delete('PART');
-	registry_read('core')->event_delete('QUIT');
+	registry_read('core')->event_delete(1, 'PING');
+	registry_read('core')->event_delete(1, 'EOS');
+	registry_read('core')->event_delete(1, 'MESSAGE');
+	registry_read('core')->event_delete(1, 'NEWUSER');
+	registry_read('core')->event_delete(1, 'NICK');
+	registry_read('core')->event_delete(1, 'MODE');
+	registry_read('core')->event_delete(1, 'JOIN');
+	registry_read('core')->event_delete(1, 'PART');
+	registry_read('core')->event_delete(1, 'QUIT');
 
 	undef(&new);
 	undef(&initialize);
@@ -181,7 +182,7 @@ sub shutdown {
 
 sub do_match {
 	my ($self, $buffer, $matchon, $regex) = @_;
-	if ($matchon eq 'raw') { # full string 
+	if ($matchon eq 'raw') { # full string
 		return(1, ($buffer)) if ($buffer =~ m/$regex/i);
 	}
 	elsif ($matchon eq 'privmsg') {
@@ -229,7 +230,7 @@ sub do_match {
 	}
 	elsif ($matchon eq 'mode') {
 		my ($source, $channel, $change, $params);
-		if ($buffer =~ /^:(.*?) MODE #(.*?) (.*?) (.*)$/i) {
+		if ($buffer =~ /^:(.*?) MODE #(.*?) (.*?)\s?(.*)$/i) {
 			($source, $channel, $change, $params) = ($1, '#'.$2, $3, $4);
 			return(1, ($source, $channel, $change, $params)) if ($change  =~ m/$regex/i);
 			return(1, ($source, $channel, $change, $params)) if ($channel =~ m/$regex/i);
@@ -238,7 +239,7 @@ sub do_match {
 		}
 	}
 }
-	
+
 sub proto_ping {
 	my ($data) = @_;
 	my $self   = registry_read('backend.irc.handle');
@@ -280,12 +281,42 @@ sub proto_nick_change {
 	registry_read('backend.db.handle')->client_rename($oldnick, $newnick);
 }
 
-sub proto_mode {
+sub proto_client_mode {
 	my ($data) = @_;
 	my $self   = registry_read('backend.irc.handle');
 	$data      =~ /^:(.*?) MODE (.*?) :(.*)$/;
 	my ($nick, $dest, $mode) = ($1, $2, $3);
 	debug($nick.' sets mode '.$mode.' in/on '.$dest, 2);
+	registry_read('backend.db.handle')->client_mode($nick, $mode);
+}
+
+sub proto_channel_mode {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	my $db     = registry_read('backend.db.handle');
+	$data      =~ /^:(.*?) MODE #(.*?) (.*)$/;
+	my ($nick, $dest, $mode) = ($1, '#'.$2, $3);
+	debug($nick.' sets mode '.$mode.' in/on '.$dest, 2);
+
+	my ($action, $paramloc, @modes, @params);
+	@params   = split(/\s/, $mode);
+	@modes    = split(//, @params[0]);
+	$paramloc = 1;
+	foreach my $mode (@modes) {
+		debug('individual mode handle', 4);
+		if ($mode =~ /^(-|\+)$/) {
+			$action = $1;
+			debug('action changed to '.$action, 4);
+		}
+		elsif ($mode =~ /^(b|q|a|o|h|v)$/) {
+			debug('parameter-added handle '.$mode, 4);
+			$db->channel_mode_with_param($nick, $dest, $action, $mode, $params[$paramloc++]);
+		}
+		else {
+			debug('simple modechange '.$mode, 4);
+			$db->channel_mode($nick, $dest, $action, $mode);
+		}
+	}
 }
 
 sub proto_join {
@@ -400,8 +431,24 @@ sub client_force_mode {
 
 sub client_mode {
 	my ($self, $cid, $target, $modes) = @_;
+	my $db                            = registry_read('backend.db.handle');
 	my $nick			  = registry_read('backend.db.handle')->int_client_nick($cid);
 	$self->sendraw(':%s MODE %s %s', $nick, $target, $modes);
+	my ($action, $paramloc, @modes, @params);
+	@params   = split(/\s/, $modes);
+	@modes    = split(//, @params[0]);
+	$paramloc = 1;
+	foreach my $mode (@modes) {
+		if ($mode =~ /^(-|\+)$/) {
+			$action = $1;
+		}
+		elsif ($mode =~ /^(b|q|a|o|h|v)$/) {
+			$db->channel_mode_with_param($nick, $target, $action, $mode, $params[$paramloc++]);
+		}
+		else {
+			$db->channel_mode($nick, $target, $action, $mode);
+		}
+	}
 }
 
 sub client_force_nick {
@@ -473,6 +520,7 @@ sub sendraw {
 		$data = $deflated;
 	}
 	syswrite($socket, $data);
+	debug($data, 4);
 	registry_write('backend.irc.Unreal32.bytes.sent', registry_read('backend.irc.Unreal32.bytes.sent') + length($data));
 }
 

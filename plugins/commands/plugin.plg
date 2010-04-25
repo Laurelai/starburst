@@ -23,7 +23,7 @@ sub new {
 
 sub initialize {
 	my ($self) = @_;
-	registry_read('core')->event_insert('CMD_plugin', 'privmsg', '^plugin', \&command_plugin);
+	registry_read('core')->event_insert(2, 'CMD_plugin', 'privmsg', '^plugin', \&command_plugin);
 }
 
 sub shutdown {

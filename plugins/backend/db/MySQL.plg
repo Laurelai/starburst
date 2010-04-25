@@ -30,6 +30,8 @@ sub initialize {
 	registry_write('backend.db.MySQL.db_host', 'localhost') if (!registry_read('backend.db.MySQL.db_host'));
 	die('backend.db.MySQL.db_user is unset.')               if (!registry_read('backend.db.MySQL.db_user'));
 	die('backend.db.MySQL.db_name is unset.')               if (!registry_read('backend.db.MySQL.db_name'));
+
+	registry_read('core')->event_insert('MySQL_modeparse', 'mode', '.*', \&channel_mode);
 }
 
 sub start {
@@ -75,6 +77,18 @@ EOF
 	$sql->query('DROP TABLE IF EXISTS clients');
 	$sql->query($table);
 
+	# client modes
+	$table = <<EOF;
+CREATE TABLE IF NOT EXISTS client_modes (
+  mid int(11) NOT NULL AUTO_INCREMENT,
+  clientid int(11) NOT NULL,
+  mode varchar(1) NOT NULL,
+    PRIMARY KEY (mid)
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 AUTO_INCREMENT=1
+EOF
+	$sql->query('DROP TABLE IF EXISTS client_modes');
+	$sql->query($table);
+
 	# users
 	$table = <<EOF;
 CREATE TABLE IF NOT EXISTS users (
@@ -117,13 +131,24 @@ CREATE TABLE IF NOT EXISTS channel_client_lookup (
   lid int(11) NOT NULL AUTO_INCREMENT,
   channel int(11) NOT NULL,
   `client` int(11) NOT NULL,
-  op tinyint(1) NOT NULL,
-  halfop tinyint(1) NOT NULL,
-  voice tinyint(1) NOT NULL,
   PRIMARY KEY (lid)
 ) ENGINE=MyISAM DEFAULT CHARSET=latin1 AUTO_INCREMENT=1 ;
 EOF
 	$sql->query('DROP TABLE IF EXISTS channel_client_lookup');
+	$sql->query($table);
+
+	# client<->channel modes
+	$table = <<EOF;
+CREATE TABLE IF NOT EXISTS channel_modes (
+  mid int(11) NOT NULL AUTO_INCREMENT,
+  channelid int(11) NOT NULL,
+  clientid int(11) NULL,
+  mode varchar(1) NOT NULL,
+  modeparam varchar(64) NULL,
+    PRIMARY KEY (mid)
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 AUTO_INCREMENT=1
+EOF
+	$sql->query('DROP TABLE IF EXISTS channel_modes');
 	$sql->query($table);
 
 	# registered channels
@@ -263,6 +288,50 @@ sub client_hostmask {
 	}
 	return(($nick, $ident, $host));
 }
+
+sub client_mode {
+	my ($self, $nick, $modes) = @_;
+	my $sql                   = registry_read('backend.db.MySQL.db_handle');
+	$nick                     = $self->client_nick_to_id($nick);
+	my $action;
+	my (@mode_array) = split(//, $modes);
+	foreach my $mode (@mode_array) {
+		if ($mode =~ /(\+|-)/) {
+			$action = $1;
+			next;
+		}
+		if ($action eq '+') {
+			$sql->query('INSERT INTO client_modes(clientid, mode) VALUES(%d, %s)', $nick, $mode);
+		}
+		else {
+			$sql->query('DELETE FROM client_modes WHERE clientid = %d AND mode = %s', $nick, $mode);
+		}
+	}
+}
+
+sub channel_mode {
+	my ($self, $source, $channel, $action, $mode) = @_;
+	my $self                  = registry_read('backend.db.handle');
+	my $sql                   = registry_read('backend.db.MySQL.db_handle');
+	$channel                  = $self->channel_name_to_id($channel);
+	$sql->query('DELETE FROM channel_modes WHERE channelid = %d AND mode = %s', $channel, $mode) if ($action eq '-');
+	$sql->query('INSERT INTO channel_modes(channelid, mode) VALUES(%d, %s)', $channel, $mode) if ($action eq '+');
+}
+sub channel_mode_with_param {
+	my ($self, $source, $channel, $action, $mode, $parameter) = @_;
+	my $self                  = registry_read('backend.db.handle');
+	my $sql                   = registry_read('backend.db.MySQL.db_handle');
+	$channel                  = $self->channel_name_to_id($channel);
+	$sql->query('DELETE FROM channel_modes WHERE channelid = %d AND mode = %s', $channel, $mode) if ($action eq '-');
+	if ($action eq '+') {
+		$sql->query('INSERT INTO channel_modes(channelid, mode) VALUES(%d, %s)', $channel, $mode);
+		my $clientid = $self->client_nick_to_id($parameter);
+		$sql->query('UPDATE channel_modes SET clientid = %d WHERE mid = %d', $clientid, $sql->last_insert_id) if ($clientid);
+		$sql->query('UPDATE channel_modes SET modeparam = %s WHERE mid = %d', $parameter, $sql->last_insert_id) if (!$clientid);
+	}
+}
+
+
 sub channel_name_to_id {
 	my ($self, $name) = @_;
 	my $sql           = registry_read('backend.db.MySQL.db_handle');
@@ -281,7 +350,7 @@ sub channel_name_to_id {
 
 sub channel_id_to_name {
 	my ($self, $cid) = @_;
-	my $sql           = registry_read('backend.db.MySQL.db_handle');
+	my $sql          = registry_read('backend.db.MySQL.db_handle');
 	my ($name);
 	if ($self->sql_cache('channels:cid='.$cid.':name')) {
 		$name = $self->sql_cache('channels:cid='.$cid.':name');
@@ -294,6 +363,153 @@ sub channel_id_to_name {
 	}
 	return($name);
 }
+
+sub channel_reg_name_to_id {
+	my ($self, $name) = @_;
+	my $sql           = registry_read('backend.db.MySQL.db_handle');
+	my ($cid);
+	if ($self->sql_cache('registered_channels:name='.$name.':cid')) {
+		$cid = $self->sql_cache('registered_channels:name='.$name.':cid');
+		$self->sql_cachehit();
+	}
+	else {
+		($cid) = $sql->query('SELECT cid FROM registered_channels WHERE channel = %s', $name);
+		$self->sql_insertcache('registered_channels:name='.$name.':cid', $cid);
+		$self->sql_cachemiss();
+	}
+	return($cid);
+}
+
+sub channel_reg_id_to_name {
+	my ($self, $cid) = @_;
+	my $sql          = registry_read('backend.db.MySQL.db_handle');
+	my ($name);
+	if ($self->sql_cache('registered_channels:cid='.$cid.':name')) {
+		$name = $self->sql_cache('registered_channels:cid='.$cid.':name');
+		$self->sql_cachehit();
+	}
+	else {
+		($name) = $sql->query('SELECT channel FROM registered_channels WHERE cid = %d', $cid);
+		$self->sql_insertcache('registered_channels:cid='.$cid.':name', $name);
+		$self->sql_cachemiss();
+	}
+	return($name);
+}
+
+sub channel_client_mode {
+	my ($self, $cid, $clientid, $mode) = @_;
+	my $sql                            = registry_read('backend.db.MySQL.db_handle');
+	debug('checking for '.$mode.' on '.$cid.' (cli: '.$clientid.')', 4);
+	my ($has_flag)                     = $self->sql_cache('channel_modes:channelid='.$cid.'clientid='.$clientid.'mode='.$mode.':mid');
+	if ($has_flag) {
+		debug('cache hit '.$has_flag);
+		$self->sql_cachehit();
+	}
+	else {
+		$self->sql_cachemiss();
+		($has_flag) = $sql->query('SELECT mid FROM channel_modes WHERE channelid = %d AND clientid = %d AND mode = %d', $cid, $clientid, $mode);
+		$self->sql_insertcache('channel_modes:channelid='.$cid.'clientid='.$clientid.'mode='.$mode.':mid', $has_flag);
+		debug('cache miss '.$has_flag);
+	}
+	debug('returning '.$has_flag);
+	return($has_flag);
+}
+
+sub channel_registered {
+	my ($self, $channel) = @_;
+	my $sql              = registry_read('backend.db.MySQL.db_handle');
+	my ($is_regged)      = $self->sql_cache('registered_channels:channel='.$channel.':cid');
+	if ($is_regged) {
+		$self->sql_cachehit();
+	}
+	else {
+		$self->sql_cachemiss();
+		($is_regged) = $sql->query('SELECT cid FROM registered_channels WHERE channel = %s', $channel);
+		$self->sql_insertcache('registered_channels:channel='.$channel.':cid', $is_regged);
+	}
+	return($is_regged);
+}
+
+sub channel_register {
+	my ($self, $channel, $userid) = @_;
+	my $sql                       = registry_read('backend.db.MySQL.db_handle');
+	$sql->query('INSERT INTO registered_channels(channel, owner) VALUES(%s, %d)', $channel, $userid);
+	return($sql->last_insert_id);
+}
+
+sub channel_permissions_add {
+	my ($self, $rcid, $userid, $flag) = @_;
+	my $sql                           = registry_read('backend.db.MySQL.db_handle');
+	$sql->query('INSERT INTO registered_channel_flags(channel, user, flag) VALUES(%d, %d, %s)', $rcid, $userid, $flag);
+	return($sql->last_insert_id);
+}
+
+sub channel_permissions {
+	my ($self, $rcid, $userid, $flag, $chkall) = @_;
+	my $sql                                    = registry_read('backend.db.MySQL.db_handle');
+	my ($permid)                               = $self->sql_cache('registered_channel_flags:channel='.$rcid.'user='.$userid.'flag='.$flag.':pid');
+	if (!$permid) {
+		$self->sql_cachemiss();
+		debug('SELECTing permission id from rcflags. rcid='.$rcid.' userid='.$userid.' flag='.$flag, 4);
+		($permid) = $sql->query('SELECT pid FROM registered_channel_flags WHERE channel = %d AND user = %d AND ('.(!$chkall ? 'flag = \'all\' OR ' : '').'flag = %s)', $rcid, $userid, $flag);
+		$self->sql_insertcache('registered_channel_flags:channel='.$rcid.'user='.$userid.'flag='.$flag.':pid', $permid);
+	}
+	else {
+		$self->sql_cachehit();
+	}
+	return($permid);
+}
+
+sub channel_permissions_del {
+	my ($self, $rcid, $userid, $flag) = @_;
+	my $sql                           = registry_read('backend.db.MySQL.db_handle');
+	$sql->query('DELETE FROM registered_channel_flags WHERE channel = %d AND user = %d AND flag = %s', $rcid, $userid, $flag);
+	$self->sql_deletecache('registered_channel_flags:channel='.$rcid.'user='.$userid.'flag='.$flag.':pid');
+}
+
+sub channel_permissions_all {
+	my ($self, $rcid) = @_;
+	my $sql           = registry_read('backend.db.MySQL.db_handle');
+	my (@flags)       = $sql->query('SELECT user,flag FROM registered_channel_flags WHERE channel = %d', $rcid);
+	# build up our return array
+	my (@return);
+	debug('channel flag list for '.$rcid.' has '.$#flags.' entries', 4);
+	for (my $x = 0; $x <= $#flags; $x += 2) {
+		debug('flag '.$flags[$x + 1].' to '.$flags[$x], 4);
+		my @buffer = ($flags[$x], $flags[$x + 1]);
+		push(@return, \@buffer);
+	}
+	return(@return);
+}
+
+sub channel_modelock {
+	my ($self, $rcid, $modes) = @_;
+	my $sql                   = registry_read('backend.db.MySQL.db_handle');
+	$sql->query('UPDATE registered_channels SET modes = %d WHERE cid = %d', $modes, $rcid);
+}
+
+sub channel_modelock_get {
+	my ($self, $rcid) = @_;
+	my $sql           = registry_read('backend.db.MySQL.db_handle');
+	my ($modes)       = $self->sql_cache('registered_channels:cid='.$rcid.':modes');
+	if (!$modes) {
+		$self->sql_cachemiss();
+		($modes) = $sql->query('SELECT modes FROM registered_channels WHERE cid = %d', $rcid);
+		$self->sql_insertcache('registered_channels:cid='.$rcid.':modes', $modes);
+	}
+	else {
+		$self->sql_cachehit();
+	}
+	return($modes);
+}
+
+sub channel_drop {
+	my ($self, $rcid) = @_;
+	return; # stub
+}
+
+
+
 
 # External client utilities. These set values.
 
@@ -331,9 +547,11 @@ sub client_part {
 	$cid                        = $self->channel_name_to_id($channel);
 	debug('Deleting channel lookup entry chan_id='.$cid.' client_id='.$uid, 4);
 	$sql->query('DELETE FROM channel_client_lookup WHERE channel = %d AND client = %d', $cid, $uid);
+	$sql->query('DELETE FROM channel_modes WHERE channelid = %d AND clientid = %d', $cid, $uid);
 	my @users = $sql->query('SELECT lid FROM channel_client_lookup WHERE channel = %d', $cid);
 	if ($#users == -1) { # nobody left on the channel, clean it up
 		debug('Deleting channel entry '.$cid.' - nobody on channel', 4);
+		$sql->query('DELETE FROM channel_modes WHERE channelid = %d', $cid);
 		$sql->query('DELETE FROM channels WHERE cid = %d', $cid);
 	}
 }
@@ -343,7 +561,7 @@ sub client_quit {
 	my $sql           = registry_read('backend.db.MySQL.db_handle');
 	my ($cid);
 	$cid              = $self->client_nick_to_id($nick);
-	$sql->query('DELETE FROM clients WHERE cid = %d', $cid);
+	$sql->query('DELETE FROM channel_modes WHERE clientid = %d', $cid);
 	my (@channels) = $sql->query('SELECT channel FROM channel_client_lookup WHERE client = %d', $cid);
 	foreach my $chanid (@channels) {
 		my $channel = $self->channel_id_to_name($chanid);
@@ -354,6 +572,8 @@ sub client_quit {
 	if ($uid) {
 		$self->user_logout($uid);
 	}
+
+	$sql->query('DELETE FROM clients WHERE cid = %d', $cid);
 }
 
 sub client_rename {
@@ -378,6 +598,34 @@ sub user_name_to_id {
 		$self->sql_cachehit();
 	}
 	return($userid);
+}
+sub user_id_to_name {
+	my ($self, $username) = @_;
+	my $sql		      = registry_read('backend.db.MySQL.db_handle');
+	my ($userid)          = $self->sql_cache('users:uid='.$username.':username');
+	if (!$userid) {
+		($userid)     = $sql->query('SELECT username FROM users WHERE uid = %d', $username);
+		$self->sql_insertcache('users:uid='.$username.':username', $userid);
+		$self->sql_cachemiss();
+	}
+	else {
+		$self->sql_cachehit();
+	}
+	return($userid);
+}
+sub user_name_to_nick {
+	my ($self, $username) = @_;
+	my $sql		      = registry_read('backend.db.MySQL.db_handle');
+	my ($nick)            = $self->sql_cache('users:username='.$username.':nick');
+	if (!$nick) {
+		($nick)     = $sql->query('SELECT nick FROM users WHERE username = %s', $username);
+		$self->sql_insertcache('users:username='.$username.':nick', $nick);
+		$self->sql_cachemiss();
+	}
+	else {
+		$self->sql_cachehit();
+	}
+	return($nick);
 }
 sub user_nick_to_id {
 	my ($self, $nickname) = @_;
@@ -458,7 +706,6 @@ sub user_identify {
 	$self->sql_insertcache('users:uid='.$uid.':username', $user);
 	$self->sql_insertcache('users:uid='.$uid.':nick', $nick);
 	$self->sql_insertcache('users:uid='.$uid.':online', 1);
-	$self->user_vhost_apply($uid);
 	return($uid);
 }
 
@@ -471,11 +718,10 @@ sub user_logout {
 	$self->sql_insertcache('users:uid='.$userid.':online', 0);
 }
 
-sub user_vhost_apply {
+sub user_vhost {
 	my ($self, $userid) = @_;
 	my $sql             = registry_read('backend.db.MySQL.db_handle');
 	my ($vhost)         = $self->sql_cache('users:uid='.$userid.':vhost');
-	my ($nick)          = $self->sql_cache('users:uid='.$userid.':nick');
 	if (!$vhost) {
 		($vhost) = $sql->query('SELECT vhost FROM users WHERE uid = %d', $userid);
 		$self->sql_insertcache('users:uid='.$userid.':vhost', $vhost) if ($vhost);
@@ -484,15 +730,7 @@ sub user_vhost_apply {
 	else {
 		$self->sql_cachehit();
 	}
-	if (!$nick) {
-		($vhost) = $sql->query('SELECT nick FROM users WHERE uid = %d', $userid);
-		$self->sql_insertcache('users:uid='.$userid.':nick', $nick) if ($nick);
-		$self->sql_cachemiss() if ($nick);
-	}
-	else {
-		$self->sql_cachehit();
-	}
-	registry_read('backend.irc.handle')->client_change_host($nick, $vhost) if ($vhost);
+	return($vhost);
 }
 
 sub user_vhost_set {
@@ -509,7 +747,6 @@ sub user_vhost_set {
 	}
 	$self->sql_insertcache('users:uid='.$userid.':vhost', $vhost);
 	$sql->query('UPDATE users SET vhost = %s WHERE uid = %d', $vhost, $userid);
-	$self->user_vhost_apply($userid);
 }
 
 # MySQL cache routines
@@ -531,6 +768,13 @@ sub sql_flushcache {
 sub sql_insertcache {
 	my ($self, $key, $value) = @_;
 	$self->{sql_cache}{$key} = $value;
+}
+
+
+sub sql_deletecache {
+	my ($self, $key, $value) = @_;
+	$self->{sql_cache}{$key} = "";
+	undef($self->{sql_cache}{$key});
 }
 
 sub sql_cachehit {

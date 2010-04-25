@@ -2,6 +2,7 @@
 package core;
 use strict;
 use CommonRoutines;
+use Time::HiRes qw[gettimeofday];
 
 BEGIN {
 	$__plugin_name    = 'starburst';
@@ -25,19 +26,25 @@ sub initialize {
 	my ($self) = @_;
 	registry_write('core', $self);
 	my $dir;
-	opendir($dir, registry_read('plugins.folder').'commands/');
-	if (!$dir) {
-		debug('Failed to get list of command plugins: '.$!, 0);
-		debug('Starburst will continue to run, but it will be useless!');
+	foreach my $path (('commands', 'autoload')) {
+		opendir($dir, registry_read('plugins.folder').'/'.$path);
+		if (!$dir) {
+			debug('Failed to get list of plugins: '.$!, 0);
+			next
+		}
+		while (my $file = readdir($dir)) {
+			next if ($file =~ /^(\.|\.\.)$/); # . and .. aren't plugins
+			$file =~ s/\.plg$//;
+			plugin_load($path.'.'.$file);
+		}
+		closedir($dir);
 	}
-	while (my $file = readdir($dir)) {
-		next if ($file =~ /^(\.|\.\.)$/); # . and .. aren't plugins
-		$file =~ s/\.plg$//;
-		plugin_load('commands.'.$file);
-	}
-	closedir($dir);
 	plugin_load(registry_read('backend.db'));
 	plugin_load(registry_read('backend.irc'));
+	if (!registry_read('backend.db.handle') || !registry_read('backend.irc.handle')) {
+		debug('Failed to load a required plugin. Try enabling verbosity if there is no error message.', 0);
+		exit;
+	}
 }
 
 sub start {
@@ -57,17 +64,33 @@ sub run {
 	while (1) {
 		my $buffer = $irc->readraw();
 		debug($buffer, 5);
-		my @events = registry_tree_single('core.events');
-		foreach my $event (@events) {
-			my $regex   = registry_read('core.events.'.$event.'.regex');
-			my $matchon = registry_read('core.events.'.$event.'.matchon');
-			my ($success, @returns) = $irc->do_match($buffer, $matchon, $regex);
-			if ($success) {
-				debug('Event \''.$event.'\' fired', 3);
-				my $routine  = registry_read('core.events.'.$event.'.routine');
-				my $runcount = registry_read('core.events.'.$event.'.runcount');
-				&$routine(@returns);
-				registry_write('core.events.'.$event.'.runcount', $runcount + 1);
+		for (my $x = 1; $x < 9; $x++) { # XXX: this is a nasty hack. figure out a good way to do this nicely.
+			my @events = registry_tree_single('core.events.prio.'.$x);
+			foreach my $event (@events) {
+				my $event_start_time = join('.', gettimeofday);
+				my $regex   = registry_read('core.events.prio.'.$x.'.'.$event.'.regex');
+				my $matchon = registry_read('core.events.prio.'.$x.'.'.$event.'.matchon');
+				my ($success, @returns) = $irc->do_match($buffer, $matchon, $regex);
+				if ($success) {
+					debug('Event \''.$event.'\' fired', 3);
+					my $routine  = registry_read('core.events.prio.'.$x.'.'.$event.'.routine');
+					my $runcount = registry_read('core.events.prio.'.$x.'.'.$event.'.runcount');
+					&$routine(@returns);
+					registry_write('core.events.prio.'.$x.'.'.$event.'.runcount', $runcount + 1);
+					if (registry_read('starburst.profile_all') || registry_read('starburst.profile_events')) {
+						my $event_end_time = join('.', gettimeofday);
+						my $event_time     = abs($event_end_time - $event_start_time);
+						registry_write('profile.events.averagetime', ((registry_read('profile.events.averagetime') + $event_time) / 2));
+						if ($event_time > registry_read('profile.events.longest_time')) {
+							registry_write('profile.events.longest_time', $event_time);
+							registry_write('profile.events.longest_time_name', $event);
+						}
+						if (!registry_read('profile.events.shortest_time') || $event_time < registry_read('profile.events.shortest_time')) {
+							registry_write('profile.events.shortest_time', $event_time);
+							registry_write('profile.events.shortest_time_name', $event);
+						}
+					}
+				}
 			}
 		}
 	}
@@ -85,19 +108,19 @@ sub shutdown {
 }
 
 sub event_insert {
-	my ($self, $event, $matchon, $regex, $routine) = @_;
-	debug('Creating new event \''.$event.'\' matching on \''.$matchon.'\'.', 0);
+	my ($self, $prio, $event, $matchon, $regex, $routine) = @_;
+	debug('Creating new event \''.$event.'\' matching on \''.$matchon.'\' priority '.$prio.'.', 1);
 	debug('Event regex: '.$regex.'  --  Routine '.$routine, 2);
-	registry_write('core.events.'.$event.'.regex',    $regex);
-	registry_write('core.events.'.$event.'.routine',  $routine);
-	registry_write('core.events.'.$event.'.matchon',  $matchon);
-	registry_write('core.events.'.$event.'.runcount', 0);
+	registry_write('core.events.prio.'.$prio.'.'.$event.'.regex',    $regex);
+	registry_write('core.events.prio.'.$prio.'.'.$event.'.routine',  $routine);
+	registry_write('core.events.prio.'.$prio.'.'.$event.'.matchon',  $matchon);
+	registry_write('core.events.prio.'.$prio.'.'.$event.'.runcount', 0);
 }
 
 sub event_delete {
-	my ($self, $event) = @_;
+	my ($self, $prio, $event) = @_;
 	debug('Deleting event \''.$event.'\'.', 0);
-	registry_deletetree('core.events.'.$event);
+	registry_deletetree('core.events.prio'.$prio.'.'.$event);
 }
 
 1;

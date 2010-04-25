@@ -39,7 +39,7 @@ sub registry_init_from_file {
 		return(0);
 	}
 	my ($fh, %temp);
-	my $confreader = Azusa::Configuration->new();
+	my $confreader = Azusa::Configuration->new(verbosity => 0);
 	my ($lp, $err) = $confreader->load($file, \%temp);
 	if (!$lp) {
 		$error = $err;
@@ -179,6 +179,7 @@ sub debug {
 	my ($message, $verbosity) = @_;
 	my $call_level = 1;
 	my $regverb = $registry{verbosity}{value} || 0;
+	$verbosity = "0" if (!$verbosity);
 	if ($regverb >= $verbosity) {
                	my( $package, $filename, $line, $subroutine ) = caller($call_level);
                	while ($filename =~ /^\(eval \d+\)$/) { # we're in an eval. go up one
@@ -245,7 +246,7 @@ sub gen_hash {
 	return($md5->hexdigest);
 }
 
-sub seconds_lenstr { 
+sub seconds_lenstr {
 	my ($seconds) = @_;
 	my @parts = gmtime($seconds);
 	my ($str);
@@ -256,11 +257,11 @@ sub seconds_lenstr {
 	return($str);
 }
 
-sub format_bytes { 
+sub format_bytes {
 	my ($bytes) = @_;
 	return(Number::Bytes::Human::format_bytes($bytes));
 }
-	
+
 
 sub registry_size {
 	return(keys(%registry));
@@ -390,7 +391,7 @@ sub _parse_args {
     $options{ROUND_FUNCTION} = _round_function($options{ROUND_STYLE});
     $options{ZERO} = '0';
     #$options{SUFFIXES} = # deferred to the last minute when we know BLOCK, seek [**]
-  } 
+  }
   # else { %options = %$seed } # this is set if @_!=0, down below
 
   if (@_==0) { # quick return for default values (no customized args)
@@ -402,7 +403,7 @@ sub _parse_args {
   }
 
   # this is done here so this assignment/copy doesn't happen if @_==0
-  %options = %$seed unless %options; 
+  %options = %$seed unless %options;
 
 # block | block_size | base | bs => 1024 | 1000
 # block_1024 | base_1024 | 1024 => $true
@@ -420,7 +421,7 @@ sub _parse_args {
       croak "invalid base: $block (should be 1024, 1000 or 1024000)";
     }
     $options{BLOCK} = $block;
-    
+
   } elsif ($args{block_1024} ||
            $args{base_1024}  ||
            $args{1024}) {
@@ -467,7 +468,7 @@ sub _parse_args {
   if (exists $args{zero}) {
     $options{ZERO} = $args{zero};
     if (defined $options{ZERO}) {
-      $options{ZERO} =~ s/%S/$options{SUFFIXES}->[0]/g 
+      $options{ZERO} =~ s/%S/$options{SUFFIXES}->[0]/g
     }
   }
 
@@ -518,7 +519,7 @@ sub _format_bytes {
   }
   unless (defined $suffix) { # number >= $block*($block**@suffixes) [>= 1E30, that's huge!]
       unless ($options{QUIET}) {
-        my $pow = @suffixes+1; 
+        my $pow = @suffixes+1;
         carp "number too large (>= $block**$pow)"
       }
       $suffix = $suffixes[-1];
@@ -528,7 +529,7 @@ sub _format_bytes {
 
   my $num;
   if ($x < 10.0) {
-    $num = sprintf("%.1f", human_round($x*10)/10); 
+    $num = sprintf("%.1f", human_round($x*10)/10);
   } else {
     $num = sprintf("%d", human_round($x));
   }
@@ -569,7 +570,7 @@ sub format {
 }
 
 
-# the solution by COG in Filesys::DiskUsage 
+# the solution by COG in Filesys::DiskUsage
 # convert size to human readable format
 #sub _convert {
 #  defined (my $size = shift) || return undef;

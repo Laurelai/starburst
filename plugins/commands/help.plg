@@ -23,13 +23,13 @@ sub new {
 
 sub initialize {
 	my ($self) = @_;
-	registry_read('core')->event_insert('CMD_help', 'privmsg', '^help', \&command_help);
+	registry_read('core')->event_insert(2, 'CMD_help', 'privmsg', '^help', \&command_help);
 }
 
 sub shutdown {
 	my ($self) = @_;
 	undef(&command_help);
-	registry_read('core')->event_delete('CMD_help');
+	registry_read('core')->event_delete(2, 'CMD_help');
 	undef($self);
 	return(0);
 }
@@ -63,16 +63,11 @@ EOF
 	}
 	elsif ($message[1] =~ /channel acllist$/i) {
 		$helpdoc = <<EOF;
-The following flags are specified with a specific username.
+The following flags are specified with a specific username/nickname. Omit the nickname/username for everybody to have this flag set.
 Example: /msg $botnick CHANNEL ACL ADD #starburst bob voice
 op - automatically ops a user on join.
 halfop - automatically halfops a user upon join.
 voice - automatically voices a user upon join.
-The following flags are specified with no user.
-Example: /msg $botnick CHANNEL ACL ADD #starburst autoop
-autoop - automatically ops all clients that join.
-autohalfop - automatically halfops all clients that join.
-autovoice - automatically voices all clients that join.
 EOF
 	}
 	elsif ($message[1] =~ /channel$/i) {
@@ -86,9 +81,9 @@ Manages the channel access control list. Starburst handles channels based on fla
 /msg $botnick HELP CHANNEL ACLLIST for a list of ACL flags.
 CHANNEL ACL VIEW - Parameters: CHANNEL ACL VIEW <channel>
 Displays the ACL table for <channel>.
-CHANNEL ACL ADD - Parameters: CHANNEL ACL ADD <channel> <username> <flag>
+CHANNEL ACL ADD - Parameters: CHANNEL ACL ADD <channel> <flag> [user/nick]
 Adds a flag to <channel> under <username>.
-CHANNEL ACL DEL - Parameters: CHANNEL ACL DEL <channel> <username> <flag>
+CHANNEL ACL DEL - Parameters: CHANNEL ACL DEL <channel> <flag> [user/nick]
 Deletes a flag from <channel> under <username>
 CHANNEL PRIVATE - Parameters: CHANNEL PRIVATE <USER/ENABLE/DISABLE> [...]
 CHANNEL PRIVATE USER - Parameters CHANNEL PRIVATE USER <channel> <username> <on/off>
