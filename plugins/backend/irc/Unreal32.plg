@@ -66,16 +66,16 @@ sub initialize {
 	registry_write('backend.irc.Unreal32.link.usezip', 0); # not implemented
 
 	# insert event strings
-	registry_read('core')->event_insert(1, 'PING',    'raw', '^PING :.*$',             \&proto_ping);
-	registry_read('core')->event_insert(1, 'EOS',     'raw', '^:.* EOS$',              \&proto_eos);
-	registry_read('core')->event_insert(1, 'MESSAGE', 'raw', '^:.*? PRIVMSG .*? :.*$', \&proto_privmsg);
-	registry_read('core')->event_insert(1, 'NEWUSER', 'raw', '^NICK .*$',              \&proto_new_client);
-	registry_read('core')->event_insert(1, 'NICK',    'raw', '^:.*? NICK .*$',         \&proto_nick_change);
-	registry_read('core')->event_insert(1, 'CLMODE',  'raw', '^:.*? MODE .*? :.*$',    \&proto_client_mode);
-	registry_read('core')->event_insert(1, 'CHMODE',  'raw', '^:.*? MODE .*? .*$', \&proto_channel_mode);
-	registry_read('core')->event_insert(1, 'JOIN',    'raw', '^:.*? JOIN .*$',         \&proto_join);
-	registry_read('core')->event_insert(1, 'PART',    'raw', '^:.*? PART .*$',         \&proto_part);
-	registry_read('core')->event_insert(1, 'QUIT',    'raw', '^:.*? QUIT :.*$',        \&proto_quit);
+	registry_read('core')->event_insert(1, 'PING',    'raw', '^PING :.*?$',             \&proto_ping);
+	registry_read('core')->event_insert(1, 'EOS',     'raw', '^:((?:\\s|[^\s])+?) EOS$',              \&proto_eos);
+	registry_read('core')->event_insert(1, 'MESSAGE', 'raw', '^:((?:\\s|[^\s])+?) PRIVMSG .*? :.*?$', \&proto_privmsg);
+	registry_read('core')->event_insert(1, 'NEWUSER', 'raw', '^NICK .*?$',              \&proto_new_client);
+	registry_read('core')->event_insert(1, 'NICK',    'raw', '^:((?:\\s|[^\s])+?) NICK .*?$',         \&proto_nick_change);
+	registry_read('core')->event_insert(1, 'CLMODE',  'raw', '^:((?:\\s|[^\s])+?) MODE .*? :.*?$',    \&proto_client_mode);
+	registry_read('core')->event_insert(1, 'CHMODE',  'raw', '^:((?:\\s|[^\s])+?) MODE .*? .*?$', \&proto_channel_mode);
+	registry_read('core')->event_insert(1, 'JOIN',    'raw', '^:((?:\\s|[^\s])+?) JOIN .*?$',         \&proto_join);
+	registry_read('core')->event_insert(1, 'PART',    'raw', '^:((?:\\s|[^\s])+?) PART .*?$',         \&proto_part);
+	registry_read('core')->event_insert(1, 'QUIT',    'raw', '^:((?:\\s|[^\s])+?) QUIT :.*$',        \&proto_quit);
 }
 
 sub start {
@@ -187,21 +187,21 @@ sub do_match {
 	}
 	elsif ($matchon eq 'privmsg') {
 		my ($nick, $target, $message);
-		if ($buffer =~ /^:(.*?) PRIVMSG (.*?) :(.*)$/i) {
+		if ($buffer =~ /^:((?:\\s|[^\s])+?) PRIVMSG ((?:\\s|[^\s])+?) :(.*?)$/i) {
 			($nick, $target, $message) = ($1, $2, $3);
 			return(1, ($nick, $target, $message)) if ($message =~ m/$regex/i);
 		}
 	}
 	elsif ($matchon eq 'notice') {
 		my ($nick, $target, $message);
-		if ($buffer =~ /^:(.*?) NOTICE (.*?) :(.*)$/i) {
+		if ($buffer =~ /^:((?:\\s|[^\s])+?) NOTICE ((?:\\s|[^\s])+?) :(.*?)$/i) {
 			($nick, $target, $message) = ($1, $2, $3);
 			return(1, ($nick, $target, $message)) if ($message =~ m/$regex/i);
 		}
 	}
 	elsif ($matchon eq 'join') {
 		my ($nick, $target);
-		if ($buffer =~ /^:(.*?) JOIN (.*)$/i) {
+		if ($buffer =~ /^:((?:\\s|[^\s])+?) JOIN ((?:\\s|[^\s])+?)$/i) {
 			($nick, $target) = ($1, $2);
 			return(1, ($nick, $target)) if ($target =~ m/$regex/i);
 			return(1, ($nick, $target)) if ($nick =~ m/$regex/i);
@@ -209,7 +209,7 @@ sub do_match {
 	}
 	elsif ($matchon eq 'part') {
 		my ($nick, $target, $reason);
-		if ($buffer =~ /^:(.*?) PART (.*)/i) {
+		if ($buffer =~ /^:((?:\\s|[^\s])+?) PART ((?:\\s|[^\s])+?)/i) {
 			($nick, $target) = ($1, $2);
 			my (@temp)       = split(/\s/, $target);
 			if ($#temp) { # if it exists, split out the reason
@@ -222,7 +222,7 @@ sub do_match {
 	}
 	elsif ($matchon eq 'quit') {
 		my ($nick, $reason);
-		if ($buffer =~ /^:(.*?) QUIT :(.*)$/i) {
+		if ($buffer =~ /^:((?:\\s|[^\s])+?) QUIT :((?:\\s|[^\s])+?)$/i) {
 			($nick, $reason) = ($1, $2);
 			return(1, ($nick, $reason)) if ($reason =~ m/$regex/i);
 			return(1, ($nick, $reason)) if ($nick =~ m/$regex/i);
@@ -230,7 +230,7 @@ sub do_match {
 	}
 	elsif ($matchon eq 'mode') {
 		my ($source, $channel, $change, $params);
-		if ($buffer =~ /^:(.*?) MODE #(.*?) (.*?)\s?(.*)$/i) {
+		if ($buffer =~ /^:((?:\\s|[^\s])+?) MODE #((?:\\s|[^\s])+?) (.*?)\s?(.*?)$/i) {
 			($source, $channel, $change, $params) = ($1, '#'.$2, $3, $4);
 			return(1, ($source, $channel, $change, $params)) if ($change  =~ m/$regex/i);
 			return(1, ($source, $channel, $change, $params)) if ($channel =~ m/$regex/i);
@@ -259,7 +259,7 @@ sub proto_eos {
 sub proto_privmsg {
 	my ($data) = @_;
 	my $self   = registry_read('backend.irc.handle');
-	$data      =~ /^:(.*?) PRIVMSG (.*?) :(.*)$/;
+	$data      =~ /^:((?:\\s|[^\s])+?) PRIVMSG ((?:\\s|[^\s])+?) :(.*)$/;
 	my ($nick, $dest, $message) = ($1, $2, $3);
 	debug('<'.$nick.':'.$dest.'> '.$message, 2);
 }
@@ -276,7 +276,7 @@ sub proto_new_client {
 sub proto_nick_change {
 	my ($data) = @_;
 	my $self   = registry_read('backend.irc.handle');
-	$data      =~ /^:(.*?) NICK (.*?) \d+$/;
+	$data      =~ /^:((?:\\s|[^\s])+?) NICK ((?:\\s|[^\s])+?) \d+$/;
 	my ($oldnick, $newnick) = ($1, $2);
 	debug($oldnick.' has changed his/her nickname to '.$newnick, 2);
 	registry_read('backend.db.handle')->client_rename($oldnick, $newnick);
@@ -285,7 +285,7 @@ sub proto_nick_change {
 sub proto_client_mode {
 	my ($data) = @_;
 	my $self   = registry_read('backend.irc.handle');
-	$data      =~ /^:(.*?) MODE (.*?) :(.*)$/;
+	$data      =~ /^:((?:\\s|[^\s])+?) MODE ((?:\\s|[^\s])+?) :(.*)$/;
 	my ($nick, $dest, $mode) = ($1, $2, $3);
 	debug($nick.' sets mode '.$mode.' in/on '.$dest, 2);
 	registry_read('backend.db.handle')->client_mode($nick, $mode);
@@ -295,7 +295,7 @@ sub proto_channel_mode {
 	my ($data) = @_;
 	my $self   = registry_read('backend.irc.handle');
 	my $db     = registry_read('backend.db.handle');
-	$data      =~ /^:(.*?) MODE #(.*?) (.*)$/;
+	$data      =~ /^:((?:\\s|[^\s])+?) MODE #((?:\\s|[^\s])+?) (.*)$/;
 	my ($nick, $dest, $mode) = ($1, '#'.$2, $3);
 	debug($nick.' sets mode '.$mode.' in/on '.$dest, 2);
 
@@ -323,7 +323,7 @@ sub proto_channel_mode {
 sub proto_join {
 	my ($data) = @_;
 	my $self   = registry_read('backend.irc.handle');
-	$data      =~ /^:(.*?) JOIN (.*?)$/;
+	$data      =~ /^:((?:\\s|[^\s])+?) JOIN ((?:\\s|[^\s])+?)$/;
 	my ($nick, $channel) = ($1, $2);
 	debug($nick.' has joined '.$channel, 2);
 	registry_read('backend.db.handle')->client_join($nick, $channel);
@@ -333,11 +333,11 @@ sub proto_part {
 	my ($data) = @_;
 	my $self   = registry_read('backend.irc.handle');
 	my ($nick, $channel, $reason);
-	if ($data  =~ /^:(.*?) PART (.*?) :(.*)$/) { # part with reason
+	if ($data  =~ /^:((?:\\s|[^\s])+?) PART ((?:\\s|[^\s])+?) :(.*)$/) { # part with reason
 		($nick, $channel, $reason) = ($1, $2, $3);
 	}
 	else {
-		$data      =~ /^:(.*?) PART (.*?)$/;
+		$data      =~ /^:((?:\\s|[^\s])+?) PART ((?:\\s|[^\s])+?)$/;
 		($nick, $channel) = ($1, $2);
 	}
 	debug($nick.' has left '.$channel.($reason ? ' ('.$reason.')' : ''), 2);
@@ -347,7 +347,7 @@ sub proto_part {
 sub proto_quit {
 	my ($data) = @_;
 	my $self   = registry_read('backend.irc.handle');
-	$data      =~ /^:(.*?) QUIT :(.*?)$/;
+	$data      =~ /^:((?:\\s|[^\s])+?) QUIT :((?:\\s|[^\s])+?)$/;
 	my ($nick, $message) = ($1, $2);
 	debug($nick.' has quit: '.$message);
 	registry_read('backend.db.handle')->client_quit($nick);
