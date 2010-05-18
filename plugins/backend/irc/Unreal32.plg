@@ -72,10 +72,10 @@ sub initialize {
 	registry_read('core')->event_insert(1, 'NEWUSER', 'raw', '^NICK .*?$',              \&proto_new_client);
 	registry_read('core')->event_insert(1, 'NICK',    'raw', '^:((?:\\s|[^\s])+?) NICK .*?$',         \&proto_nick_change);
 	registry_read('core')->event_insert(1, 'CLMODE',  'raw', '^:((?:\\s|[^\s])+?) MODE .*? :.*?$',    \&proto_client_mode);
-	registry_read('core')->event_insert(1, 'CHMODE',  'raw', '^:((?:\\s|[^\s])+?) MODE .*? .*?$', \&proto_channel_mode);
+	registry_read('core')->event_insert(1, 'CHMODE',  'raw', '^:((?:\\s|[^\s])+?) MODE #.*? .*?$', \&proto_channel_mode);
 	registry_read('core')->event_insert(1, 'JOIN',    'raw', '^:((?:\\s|[^\s])+?) JOIN .*?$',         \&proto_join);
 	registry_read('core')->event_insert(1, 'PART',    'raw', '^:((?:\\s|[^\s])+?) PART .*?$',         \&proto_part);
-	registry_read('core')->event_insert(1, 'QUIT',    'raw', '^:((?:\\s|[^\s])+?) QUIT :.*$',        \&proto_quit);
+	registry_read('core')->event_insert(1, 'QUIT',    'raw', '^:((?:\\s|[^\s])+?) QUIT .*$',        \&proto_quit);
 }
 
 sub start {
@@ -222,7 +222,7 @@ sub do_match {
 	}
 	elsif ($matchon eq 'quit') {
 		my ($nick, $reason);
-		if ($buffer =~ /^:((?:\\s|[^\s])+?) QUIT :((?:\\s|[^\s])+?)$/i) {
+		if ($buffer =~ /^:((?:\\s|[^\s])+?) QUIT :?(.*?)$/) {
 			($nick, $reason) = ($1, $2);
 			return(1, ($nick, $reason)) if ($reason =~ m/$regex/i);
 			return(1, ($nick, $reason)) if ($nick =~ m/$regex/i);
@@ -347,7 +347,7 @@ sub proto_part {
 sub proto_quit {
 	my ($data) = @_;
 	my $self   = registry_read('backend.irc.handle');
-	$data      =~ /^:((?:\\s|[^\s])+?) QUIT :((?:\\s|[^\s])+?)$/;
+	$data      =~ /^:((?:\\s|[^\s])+?) QUIT :?(.*?)$/;
 	my ($nick, $message) = ($1, $2);
 	debug($nick.' has quit: '.$message);
 	registry_read('backend.db.handle')->client_quit($nick);
