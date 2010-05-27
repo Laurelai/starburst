@@ -1,0 +1,71 @@
+#!/usr/bin/perl -w
+package commands::math;
+use strict;
+use CommonRoutines;
+
+BEGIN {
+	$__plugin_name    = 'Commands: math';
+	$__plugin_version = '1.0';
+	$__plugin_author  = 'ezbake consortium';
+	$__plugin_date    = 'under development';
+};
+
+$__plugin_handle  = commands::math->new();
+
+sub new {
+       	my $self = shift;
+       	$self = bless({}, $self);
+       	for (my $x = 0; $x < $#_; $x += 2) {
+               	$self->{$_[$x]} = $_[$x+1];
+       	}
+       	return($self);
+}
+
+sub initialize {
+	my ($self) = @_;
+	registry_read('core')->event_insert(2, 'CMD_math', 'privmsg', '^\!math ', \&command_math);
+}
+
+sub shutdown {
+	undef(&new);
+	undef(&initialize);
+	undef(&command_math);
+	registry_read('core')->event_delete(2, 'CMD_math');
+}
+
+sub command_math {
+        my ($nick, $target, $message) = @_;
+        my $self          = registry_read('backend.irc.handle');
+        my $botnick       = registry_read('irc.nickname');
+        my $db            = registry_read('backend.db.handle');
+	eval('use Math::Expression::Evaluator;');
+	if ($@) { 
+		$self->client_message(1, $target, $nick.': This command requires Math::Expression::Evaluator. Please install it before attempting to use this command.');
+		return(undef);
+	}
+	my $hand = Math::Expression::Evaluator->new;
+        my @buffer = split(/\s/, $message);
+	my $str    = join(' ', @buffer[1..$#buffer]);
+	my $resu;
+	eval('$resu = $hand->parse($str)->val();');
+	if ($@) {
+		my @error = split(/\n/, $@); # prepare for pretty printing
+		if ($error[1] =~ /near character (\d+)/) {
+			my $where = ($1 - 1);
+			$self->client_message(1, $target, $nick.': '.$error[0].' '.$error[1]);
+			$self->client_message(1, $target, $str);
+			$self->client_message(1, $target, (' ' x $where).'^ here');
+		}
+		else {
+			$error[0] = (split(/ at /, $error[0]))[0];
+			$self->client_message(1, $target, $nick.': '.$error[0]);
+		}
+	}
+	else {
+		$self->client_message(1, $target, $nick.': '.$resu);
+	}
+}
+
+
+1;
+
