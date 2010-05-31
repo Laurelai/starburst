@@ -27,10 +27,10 @@ sub initialize {
 }
 
 sub shutdown {
+	registry_read('core')->event_delete(2, 'CMD_math');
 	undef(&new);
 	undef(&initialize);
 	undef(&command_math);
-	registry_read('core')->event_delete(2, 'CMD_math');
 }
 
 sub command_math {

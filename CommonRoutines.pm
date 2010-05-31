@@ -1,5 +1,6 @@
 #!/usr/bin/perl -w
 use strict;
+use lib 'lib';
 package CommonRoutines;
 
 our @EXPORT = qw[

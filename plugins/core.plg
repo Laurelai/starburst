@@ -128,7 +128,7 @@ sub event_insert {
 sub event_delete {
 	my ($self, $prio, $event) = @_;
 	debug('Deleting event \''.$event.'\'.', 0);
-	registry_deletetree('core.events.prio'.$prio.'.'.$event);
+	registry_deletetree('core.events.prio.'.$prio.'.'.$event);
 }
 
 1;
