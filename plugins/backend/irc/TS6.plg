@@ -255,19 +255,21 @@ sub proto_privmsg {
 	my ($data) = @_;
 	my $self   = registry_read('backend.irc.handle');
 	$data      =~ /^:((?:\\s|[^\s])+?) PRIVMSG ((?:\\s|[^\s])+?) :(.*)$/;
-	my ($nick, $dest, $message) = ($1, $2, $3);
-	$nick = $self->uid_to_nick($nick);
-	$dest = $self->uid_to_nick($dest) if ($dest !~ /^\#/);
+	my ($uid, $dest, $message) = ($1, $2, $3);
+	my $nick = $self->uid_to_nick($uid);
+	$dest = $self->uid_to_nick($dest) if ($dest !~ /^#/);
 	debug('<'.$nick.':'.$dest.'> '.$message, 2);
 }
 
 sub proto_new_client {
 	my ($data) = @_;
 	my $self   = registry_read('backend.irc.handle');
-        $data      =~ /^:(.*?) UID (.*?) \d \d+ (.*?) (.*?) (\d+\.\d+\.\d+\.\d+) \d+\.\d+\.\d+\.\d+ (.*?) :(.*?)$/;
+        $data      =~ /^:(.*?) UID (.*?) \d \d+ (.*?) (.*?) (.*?) .*? (.*?) :(.*?)$/;
         my ($sid, $nick, $modes, $ident, $host, $uid, $realname) = ($1, $2, $3, $4, $5, $6, $7);
         $self->{uid}{$uid}   = $nick;
         $self->{nick}{$nick} = $uid;
+	# (debug) run@main.pl - :36D UID USERSERV 2 1 +DioS user services.int 0 36DAAAAAA :user registration service
+	debug('TS6: '.$nick.' uid '.$uid, 4);
 	debug('New user '.$nick.'!'.$ident.'@'.$host, 2);
 	registry_read('backend.db.handle')->client_new($nick, $ident, $host, $realname);
 }
@@ -338,6 +340,7 @@ sub proto_burst_join {
 		$flag .= 'v' if ($uid =~ /\+/);
 		$uid     =~ s/(\+|\@|\%)//g;
 		my $nick = $self->uid_to_nick($uid);
+		debug('TS6: handling '.$uid.' ('.$nick.') from '.$users, 4);
 		debug($nick.' has joined '.$channel, 2);
 		registry_read('backend.db.handle')->client_join($nick, $channel);
 		for (my $x = 0; $x <= length($flag); $x++) { # add each mode
@@ -594,10 +597,20 @@ sub readraw {
 
 sub uid_to_nick {
 	my ($self, $uid) = @_;
+	if (!$self->{uid}{$uid}) { 
+		debug('TS6: attempted to lookup unknown uid \''.$uid.'\'', 4);
+		return($uid);
+	}
+	debug('TS6: \''.$uid.'\' -> '.$self->{uid}{$uid}, 4);
 	return($self->{uid}{$uid});
 }
 sub nick_to_uid {
 	my ($self, $nick) = @_;
+	if (!$self->{nick}{$nick}) { 
+		debug('TS6: attempted to lookup unknown nick '.$nick, 4);
+		return($nick);
+	}
+	debug('TS6: '.$nick.' -> '.$self->{nick}{$nick}, 4);
 	return($self->{nick}{$nick});
 }
 
