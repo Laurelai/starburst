@@ -1,0 +1,605 @@
+#!/usr/bin/perl -w
+package backend::irc::TS6;
+use strict;
+use Azusa::MySQL;
+use CommonRoutines;
+
+use IO::Socket::INET;
+
+BEGIN {
+	$__plugin_name    = 'backend.irc.TS6';
+	$__plugin_version = '1.0';
+	$__plugin_author  = 'ezbake consortium';
+	$__plugin_date    = 'under development';
+
+};
+
+$__plugin_handle  = backend::irc::TS6->new();
+
+sub new {
+       	my $self = shift;
+       	$self = bless({}, $self);
+       	for (my $x = 0; $x < $#_; $x += 2) {
+               	$self->{$_[$x]} = $_[$x+1];
+       	}
+       	$self->{uids} = 11184810; # AAAAAA in hex, build from here
+       	return($self);
+}
+
+sub initialize {
+	my ($self) = @_;
+	debug('Initializing the TS6 (ratbox and similar) protocol plugin...', 0);
+	registry_write('backend.irc.handle', $self);
+
+	# check if we have the modules for certain extensions.
+	eval('use IO::Socket::SSL;');
+	if ($@) {
+		debug('No SSL support. Please install IO::Socket::SSL from cpan (cpan -i IO::Socket::SSL)', 0);
+		registry_write('backend.irc.TS6.link.usessl', 0);
+	}
+	eval('use Compress::Zlib;');
+	if ($@) {
+		debug('No ziplink support. Please install Compress::Zlib from cpan (cpan -i Compress::Zlib)', 0);
+		registry_write('backend.irc.TS6.link.usezip', 0);
+	}
+	eval('use IO::Socket::INET6;');
+	if ($@) {
+		debug('No IPv6 support. Please install IO::Socket::INET6 from cpan (cpan -i IO::Socket::INET6)', 0);
+		registry_write('backend.irc.TS6.link.usev6', 0);
+	}
+
+	# The config allows for the use of: yes, on, enabled, true	for 1
+	# 		and for the use of: no, off, disabled, false	for 0
+	registry_write('backend.irc.TS6.link.usessl', 1)
+		if (registry_read('backend.irc.TS6.link.usessl') =~ m/^(yes|on|enabled|true)$/i);
+	registry_write('backend.irc.TS6.link.usev6', 1)
+		if (registry_read('backend.irc.TS6.link.usev6') =~ m/^(yes|on|enabled|true)$/i);
+	registry_write('backend.irc.TS6.link.usezip', 1)
+		if (registry_read('backend.irc.TS6.link.usezip') =~ m/^(yes|on|enabled|true)$/i);
+
+	registry_write('backend.irc.TS6.link.usessl', 0)
+		if (registry_read('backend.irc.TS6.link.usessl') =~ m/^(no|off|disabled|false)$/i);
+	registry_write('backend.irc.TS6.link.usev6', 0)
+		if (registry_read('backend.irc.TS6.link.usev6') =~ m/^(no|off|disabled|false)$/i);
+	registry_write('backend.irc.TS6.link.usezip', 0)
+		if (registry_read('backend.irc.TS6.link.usezip') =~ m/^(no|off|disabled|false)$/i);
+
+	registry_write('backend.irc.TS6.link.usezip', 0); # not implemented
+
+	# insert event strings
+	registry_read('core')->event_insert(1, 'PING',      'raw', '^PING :.*?$',                                      \&proto_ping);
+	registry_read('core')->event_insert(1, 'EOS',       'raw', '^PASS .*? TS 6 :.*$',                              \&proto_eos);
+	registry_read('core')->event_insert(1, 'MESSAGE',   'raw', '^:((?:\\s|[^\s])+?) PRIVMSG .*? :.*?$',            \&proto_privmsg);
+	registry_read('core')->event_insert(1, 'NEWUSER',   'raw', '^:.*? UID .*? \d \d+ .*$',                         \&proto_new_client);
+	registry_read('core')->event_insert(1, 'NICK',      'raw', '^:((?:\\s|[^\s])+?) NICK .*? :\d+$',               \&proto_nick_change);
+	registry_read('core')->event_insert(1, 'CLMODE',    'raw', '^:((?:\\s|[^\s])+?) MODE ((?:\\s|[^\s])+?) :.*?$', \&proto_client_mode);
+	registry_read('core')->event_insert(1, 'CHMODE',    'raw', '^:((?:\\s|[^\s])+?) TMODE \d+ #.*? .*?$',          \&proto_channel_mode);
+	registry_read('core')->event_insert(1, 'JOIN',      'raw', '^:((?:\\s|[^\s])+?) JOIN \d+ #.*? .*?$',           \&proto_join);
+	# :42X SJOIN 1277064635 #opers +tn :42XAAAAAF @42XAAAAAE @42XAAAAAB
+	registry_read('core')->event_insert(1, 'BURSTJOIN', 'raw', '^:.*? SJOIN \d+ #.*? .*? :.*$',                    \&proto_burst_join);
+	registry_read('core')->event_insert(1, 'PART',      'raw', '^:((?:\\s|[^\s])+?) PART .*?$',                    \&proto_part);
+	registry_read('core')->event_insert(1, 'QUIT',      'raw', '^:((?:\\s|[^\s])+?) QUIT .*$',                     \&proto_quit);
+}
+
+sub start {
+	my ($self) = @_;
+	my ($socket);
+	# No SSL, No IPv6
+	if (!registry_read('backend.irc.TS6.link.usessl') &&  !registry_read('backend.irc.TS6.link.usev6')) {
+		$socket = IO::Socket::INET->new(        PeerHost => registry_read('backend.irc.TS6.link.host'),
+							PeerPort => registry_read('backend.irc.TS6.link.port'),
+							Proto    => 'tcp');
+
+	}
+	# No SSL, IPv6 Enabled
+	elsif (!registry_read('backend.irc.TS6.link.usessl') && registry_read('backend.irc.TS6.link.usev6')) {
+		$socket = IO::Socket::INET6->new(       PeerHost =>  registry_read('backend.irc.TS6.link.host'),
+							PeerPort =>  registry_read('backend.irc.TS6.link.port'),
+							Proto    => 'tcp');
+	}
+	# SSL (IPv6 automatically handled)
+	else {
+		$socket = IO::Socket::SSL->new(         PeerHost => registry_read('backend.irc.TS6.link.host'),
+							PeerPort => registry_read('backend.irc.TS6.link.port'),
+							Proto    => 'tcp');
+	}
+	if (!$socket) {
+		debug('No socket created. Please check your configuration options. Enable verbosity for error message.', 0);
+		debug($@, 1);
+		exit(1);
+	}
+	if (registry_read('backend.irc.TS6.link.usezip')) {
+		my $ds = deflateInit();
+		my $is = inflateInit();
+		if (!$ds || !$is) {
+			debug('Failed to create {de,}compression stream. Disabling ziplinks.', 0);
+			debug('zlib status code: '.$ds->msg.' '.$is->msg, 1);
+			registry_write('backend.irc.TS6.link.usezip', 0);
+		}
+		else {
+			registry_write('backend.irc.TS6.link.zip.deflate_handle', $ds);
+			registry_write('backend.irc.TS6.link.zip.inflate_handle', $is);
+		}
+	}
+	registry_write('backend.irc.socket', $socket);
+
+	$self->sendraw('PASS %s TS 6 :%s', registry_read('backend.irc.TS6.link.pass'), registry_read('backend.irc.TS6.link.serverid'));
+	$self->sendraw('CAPAB :EX CHW IE KLN GLN KNOCK UNKLN CLUSTER'); # capabilities line
+	$self->sendraw('SERVER %s 0 :%s', registry_read('irc.hostname'), registry_read('irc.realname'));
+	$self->sendraw('SVINFO 6 3 0 :%ld', time());
+}
+
+sub shutdown {
+	undef(&new);
+	undef(&initialize);
+	undef(&start);
+	undef(&do_match);
+	undef(&proto_ping);
+	undef(&proto_eos);
+	undef(&proto_privmsg);
+	undef(&proto_new_client);
+	undef(&proto_nick_change);
+	undef(&proto_mode);
+	undef(&proto_join);
+	undef(&proto_part);
+	undef(&proto_quit);
+	undef(&client_new);
+	undef(&client_join);
+	undef(&client_part);
+	undef(&client_kick);
+	undef(&client_invite);
+	undef(&client_change_host);
+	undef(&client_force_join);
+	undef(&client_force_part);
+	undef(&client_topic);
+	undef(&client_force_kill);
+	undef(&client_force_mode);
+	undef(&client_mode);
+	undef(&client_force_nick);
+	undef(&client_message);
+	undef(&client_notice);
+	undef(&client_gline);
+	undef(&client_gzline);
+	undef(&client_ungline);
+	undef(&client_ungzline);
+	undef(&sendraw);
+	undef(&readraw);
+	return(0);
+}
+
+sub do_match {
+	my ($self, $buffer, $matchon, $regex) = @_;
+	if ($matchon eq 'raw') { # full string
+		return(1, ($buffer)) if ($buffer =~ m/$regex/i);
+	}
+	elsif ($matchon eq 'privmsg') {
+		my ($nick, $target, $message);
+		if ($buffer =~ /^:((?:\\s|[^\s])+?) PRIVMSG ((?:\\s|[^\s])+?) :(.*?)$/i) {
+			($nick, $target, $message) = ($1, $2, $3);
+			$nick   = $self->uid_to_nick($nick);
+			$target = $self->uid_to_nick($target);
+			return(1, ($nick, $target, $message)) if ($message =~ m/$regex/i);
+		}
+	}
+	elsif ($matchon eq 'notice') {
+		my ($nick, $target, $message);
+		if ($buffer =~ /^:((?:\\s|[^\s])+?) NOTICE ((?:\\s|[^\s])+?) :(.*?)$/i) {
+			($nick, $target, $message) = ($1, $2, $3);
+			$nick   = $self->uid_to_nick($nick);
+			$target = $self->uid_to_nick($target);
+			return(1, ($nick, $target, $message)) if ($message =~ m/$regex/i);
+		}
+	}
+	elsif ($matchon eq 'join') {
+		my ($nick, $target);
+		if ($buffer =~ /^:((?:\\s|[^\s])+?) JOIN ((?:\\s|[^\s])+?)$/i) {
+			($nick, $target) = ($1, $2);
+			$nick   = $self->uid_to_nick($nick);
+			return(1, ($nick, $target)) if ($target =~ m/$regex/i);
+			return(1, ($nick, $target)) if ($nick =~ m/$regex/i);
+		}
+	}
+	elsif ($matchon eq 'part') {
+		my ($nick, $target, $reason);
+		if ($buffer =~ /^:((?:\\s|[^\s])+?) PART ((?:\\s|[^\s])+?)/i) {
+			($nick, $target) = ($1, $2);
+			$nick   = $self->uid_to_nick($nick);
+			my (@temp)       = split(/\s/, $target);
+			if ($#temp) { # if it exists, split out the reason
+				$target = $temp[0];
+				$reason = substr(join(' ', $temp[1..$#temp]), 1);
+			}
+			return(1, ($nick, $target, $reason)) if ($target =~ m/$regex/i);
+			return(1, ($nick, $target, $reason)) if ($nick =~ m/$regex/i);
+		}
+	}
+	elsif ($matchon eq 'quit') {
+		my ($nick, $reason);
+		if ($buffer =~ /^:((?:\\s|[^\s])+?) QUIT :?(.*?)$/) {
+			($nick, $reason) = ($1, $2);
+			$nick   = $self->uid_to_nick($nick);
+			return(1, ($nick, $reason)) if ($reason =~ m/$regex/i);
+			return(1, ($nick, $reason)) if ($nick =~ m/$regex/i);
+		}
+	}
+	elsif ($matchon eq 'mode') {
+		my ($source, $channel, $change, $params);
+		if ($buffer =~ /^:((?:\\s|[^\s])+?) MODE #((?:\\s|[^\s])+?) (.*?)\s?(.*?)$/i) {
+			($source, $channel, $change, $params) = ($1, '#'.$2, $3, $4);
+			$source   = $self->uid_to_nick($source);
+			return(1, ($source, $channel, $change, $params)) if ($change  =~ m/$regex/i);
+			return(1, ($source, $channel, $change, $params)) if ($channel =~ m/$regex/i);
+			return(1, ($source, $channel, $change, $params)) if ($source  =~ m/$regex/i);
+			return(1, ($source, $channel, $change, $params)) if ($params  =~ m/$regex/i);
+		}
+	}
+}
+
+sub proto_ping {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	$data      =~ /^PING :(.*)$/;
+	$self->sendraw(':%s PONG %s %s', registry_read('backend.irc.TS6.link.serverid'), registry_read('irc.hostname'), $1);
+	registry_read('backend.db.handle')->do_nothing(); # mainly: mysql not choking on its own dick
+}
+
+sub proto_eos {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	debug('IRCd sent synch', 1);
+	# registry_read('core')->join_registered_channels();
+	registry_read('backend.db.handle')->int_client_join_registered_channels(1);
+}
+
+sub proto_privmsg {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	$data      =~ /^:((?:\\s|[^\s])+?) PRIVMSG ((?:\\s|[^\s])+?) :(.*)$/;
+	my ($nick, $dest, $message) = ($1, $2, $3);
+	$nick = $self->uid_to_nick($nick);
+	$dest = $self->uid_to_nick($dest) if ($dest !~ /^\#/);
+	debug('<'.$nick.':'.$dest.'> '.$message, 2);
+}
+
+sub proto_new_client {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+        $data      =~ /^:(.*?) UID (.*?) \d \d+ (.*?) (.*?) (\d+\.\d+\.\d+\.\d+) \d+\.\d+\.\d+\.\d+ (.*?) :(.*?)$/;
+        my ($sid, $nick, $modes, $ident, $host, $uid, $realname) = ($1, $2, $3, $4, $5, $6, $7);
+        $self->{uid}{$uid}   = $nick;
+        $self->{nick}{$nick} = $uid;
+	debug('New user '.$nick.'!'.$ident.'@'.$host, 2);
+	registry_read('backend.db.handle')->client_new($nick, $ident, $host, $realname);
+}
+
+sub proto_nick_change {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	$data      =~ /^:((?:\\s|[^\s])+?) NICK (.*?) :\d+$/;
+	my ($uid, $newnick) = ($1, $2);
+	my $oldnick = $self->uid_to_nick($uid);
+	debug($oldnick.' has changed his/her nickname to '.$newnick, 2);
+	registry_read('backend.db.handle')->client_rename($oldnick, $newnick);
+}
+
+sub proto_client_mode {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	$data      =~ /^:((?:\\s|[^\s])+?) MODE ((?:\\s|[^\s])+?) :(.*?)$/;
+	my ($uid, $destuid, $mode) = ($1, $2, $3);
+	my ($nick, $dest)          = ($self->uid_to_nick($uid), $self->uid_to_nick($destuid));
+	debug($nick.' sets mode '.$mode.' in/on '.$dest, 2);
+	registry_read('backend.db.handle')->client_mode($nick, $mode);
+}
+
+sub proto_channel_mode {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	my $db     = registry_read('backend.db.handle');
+	$data      =~ /^:((?:\\s|[^\s])+?) TMODE \d+ #(.*?) (.*?)$/;
+	my ($uid, $dest, $mode) = ($1, '#'.$2, $3);
+	my ($nick)              = $self->uid_to_nick($uid);
+	debug($nick.' sets mode '.$mode.' in/on '.$dest, 2);
+
+	my ($action, $paramloc, @modes, @params);
+	@params   = split(/\s/, $mode);
+	@modes    = split(//, @params[0]);
+	$paramloc = 1;
+	foreach my $mode (@modes) {
+		debug('individual mode handle', 4);
+		if ($mode =~ /^(-|\+)$/) {
+			$action = $1;
+			debug('action changed to '.$action, 4);
+		}
+		elsif ($mode =~ /^(b|q|a|o|h|v)$/) {
+			debug('parameter-added handle '.$mode, 4);
+			$db->channel_mode_with_param($nick, $dest, $action, $mode, $self->uid_to_nick($params[$paramloc++]));
+		}
+		else {
+			debug('simple modechange '.$mode, 4);
+			$db->channel_mode($nick, $dest, $action, $mode);
+		}
+	}
+}
+
+# ^:\d\s{2} SJOIN \d+ #.*? .*? :.*$
+# :42X SJOIN 1277064635 #opers +tn :42XAAAAAF @42XAAAAAE @42XAAAAAB
+
+sub proto_burst_join {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	$data      =~ /^:.*? SJOIN \d+ #(.*?) (.*?) :(.*)$/;
+	my ($channel, $modes, $users) = ('#'.$1, $2, $3);
+	my $flag;
+	foreach my $uid (split(/\s/, $users)) {
+		undef($flag);
+		$flag .= 'o' if ($uid =~ /\@/);
+		$flag .= 'h' if ($uid =~ /\%/); # are there even ts6 servers with halfop?
+		$flag .= 'v' if ($uid =~ /\+/);
+		$uid     =~ s/(\+|\@|\%)//g;
+		my $nick = $self->uid_to_nick($uid);
+		debug($nick.' has joined '.$channel, 2);
+		registry_read('backend.db.handle')->client_join($nick, $channel);
+		for (my $x = 0; $x <= length($flag); $x++) { # add each mode
+			proto_channel_mode(sprintf(':%s TMODE %d %s %s', $uid, time, $channel, '+'.substr($flag, $x, 1).' '.$uid));
+		}
+	}
+}
+
+sub proto_join {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	$data      =~ /^:((?:\\s|[^\s])+?) JOIN \d+ #(.*?) .*?$/;
+	my ($uid, $channel) = ($1, '#'.$2);
+	my ($nick)          = $self->uid_to_nick($uid);
+	debug($nick.' has joined '.$channel, 2);
+	registry_read('backend.db.handle')->client_join($nick, $channel);
+}
+
+sub proto_part {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	my ($uid, $nick, $channel, $reason);
+	if ($data  =~ /^:((?:\\s|[^\s])+?) PART ((?:\\s|[^\s])+?) :(.*)$/) { # part with reason
+		($uid, $channel, $reason) = ($1, $2, $3);
+	}
+	else {
+		$data      =~ /^:((?:\\s|[^\s])+?) PART ((?:\\s|[^\s])+?)$/;
+		($uid, $channel) = ($1, $2);
+	}
+	$nick = $self->uid_to_nick($uid);
+	debug($nick.' has left '.$channel.($reason ? ' ('.$reason.')' : ''), 2);
+	registry_read('backend.db.handle')->client_part($nick, $channel);
+}
+
+sub proto_quit {
+	my ($data) = @_;
+	my $self   = registry_read('backend.irc.handle');
+	$data      =~ /^:((?:\\s|[^\s])+?) QUIT :?(.*?)$/;
+	my ($uid, $message) = ($1, $2);
+	my ($nick)          = $self->uid_to_nick($uid);
+	debug($nick.' has quit: '.$message);
+	registry_read('backend.db.handle')->client_quit($nick);
+}
+
+sub client_new {
+	my ($self, $nick, $ident, $host, $gecos) = @_;
+	my $cid                           = registry_read('backend.db.handle')->int_client_new($nick, $ident, $host, $gecos);
+	$self->{uids}++;
+	my $uid = registry_read('backend.irc.TS6.link.serverid').uc(sprintf('%lx', $self->{uids}));
+	$self->{uid}{$uid}   = $nick;
+	$self->{nick}{$nick} = $uid;
+	$self->sendraw(':%s UID %s 1 %ld %s %s %s 0 %s :%s',
+			registry_read('backend.irc.TS6.link.serverid'),
+			$nick,
+			time,
+			'+oi',
+			$ident,
+			$host,
+			$uid,
+			$gecos);
+	return($cid);
+}
+
+sub client_quit {
+	my ($self, $cid, $message) = @_;
+	my $nick                   = registry_read('backend.db.handle')->int_client_nick($cid);
+	my $uid                    = $self->nick_to_uid($nick);
+	$self->sendraw(':%s QUIT :%s', $uid, $message);
+	registry_read('backend.db.handle')->int_client_remove($cid);
+}
+
+sub client_join {
+	my ($self, $cid, $channels) = @_;
+	my $nick                    = registry_read('backend.db.handle')->int_client_nick($cid);
+	my $uid                     = $self->nick_to_uid($nick);
+	foreach my $channel (split(/\,/, $channels)) {
+		$self->sendraw(':%s JOIN %d %s +', $uid, time, $channel);
+	}
+}
+
+sub client_part {
+	my ($self, $cid, $channel, $reason) = @_;
+	my $nick                            = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s PART %s %s', $nick, $channel, ':'.$reason);
+}
+
+sub client_kick {
+	my ($self, $cid, $target, $channel, $reason) = @_;
+	my $nick                                     = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s KICK %s %s %s', $nick, $channel, $target, $reason);
+}
+
+sub client_invite {
+	my ($self, $cid, $target, $channel) = @_;
+	my $nick 			    = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s INVITE %s %s', $nick, $target, $channel);
+}
+
+sub client_change_host {
+	my ($self, $cid, $target, $newhost) = @_;
+	my $nick			    = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s CHGHOST %s %s', $nick, $target, $newhost);
+}
+
+sub client_force_join {
+	my ($self, $cid, $target, $channel) = @_;
+	my $nick			    = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s SAJOIN %s %s', $nick, $target, $channel);
+}
+
+sub client_force_part {
+	my ($self, $cid, $target, $channel, $reason) = @_;
+	my $nick 				     = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s SAJOIN %s %s', $nick, $target, $channel);
+}
+
+sub client_topic {
+	my ($self, $cid, $channel, $topic) = @_;
+	my ($nick, $ident, $host)          = registry_read('backend.db.handle')->int_client_hostmask($cid);
+	$self->sendraw(':%s TOPIC %s %s %d :%s', $nick, $channel, sprintf('%s!%s@%s', $nick, $ident, $host), time, $topic);
+}
+
+sub client_force_kill {
+	my ($self, $cid, $target, $reason) = @_;
+	my $nick			   = registry_read('backend.db.handle')->int_client_nick($cid);
+	$reason = 'Disconnected by services.' if (!$reason);
+	$self->sendraw(':%s SVSKILL %s :%s', $nick, $target, $reason);
+}
+
+sub client_force_mode {
+	my ($self, $cid, $target, $modes) = @_;
+	my $nick			  = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s SVS2MODE %s %s', $nick, $target, $modes);
+}
+
+sub client_mode {
+	my ($self, $cid, $target, $modes) = @_;
+	my $db                            = registry_read('backend.db.handle');
+	my $nick			  = registry_read('backend.db.handle')->int_client_nick($cid);
+	my $uid                           = $self->nick_to_uid($nick);
+	$self->sendraw(':%s MODE %s %s', $uid, $target, $modes);
+	my ($action, $paramloc, @modes, @params);
+	@params   = split(/\s/, $modes);
+	@modes    = split(//, @params[0]);
+	$paramloc = 1;
+	foreach my $mode (@modes) {
+		if ($mode =~ /^(-|\+)$/) {
+			$action = $1;
+		}
+		elsif ($mode =~ /^(b|q|a|o|h|v)$/) {
+			$db->channel_mode_with_param($nick, $target, $action, $mode, $params[$paramloc++]);
+		}
+		else {
+			$db->channel_mode($nick, $target, $action, $mode);
+		}
+	}
+}
+
+sub client_force_nick {
+	my ($self, $cid, $target, $newnick) = @_;
+	my $nick			    = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s SVSNICK %s %s %d', $nick, $target, $newnick, time);
+}
+
+sub client_message {
+	my ($self, $cid, $target, $message) = @_;
+	my $nick			    = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s PRIVMSG %s :%s', $nick, $target, $message);
+}
+
+sub client_notice {
+	my ($self, $cid, $target, $message) = @_;
+	my $nick 			    = registry_read('backend.db.handle')->int_client_nick($cid);
+	$self->sendraw(':%s NOTICE %s :%s', $nick, $target, $message);
+}
+
+sub client_gline {
+	my ($self, $cid, $target, $duration, $reason) = @_;
+	my ($nick, $ident, $host)                     = registry_read('backend.db.handle')->int_client_hostmask($cid);
+	my ($tnick, $tident, $thost);
+	if ($target !~ /\@/) { # just a nickname
+		($tnick, $tident, $thost) = registry_read('backend.db.handle')->client_hostmask(registry_read('backend.db.handle')->client_nick_to_id($target));
+	}
+	else {
+		($tident, $thost) = split(/\@/, $target);
+	}
+	$duration += time if ($duration);
+	$self->sendraw('TKL + G %s %s %s %d %d :%s', $tident, $thost, sprintf('%s!%s@%s', $nick, $ident, $host), $duration, time, $reason);
+}
+
+sub client_gzline {
+	my ($self, $cid, $target, $duration, $reason) = @_;
+	my ($nick, $ident, $host)                     = registry_read('backend.db.handle')->int_client_hostmask($cid);
+	$duration += time if ($duration);
+	$self->sendraw('TKL + Z %s %s %d %d :%s', $target, sprintf('%s!%s@%s', $nick, $ident, $host), $duration, time, $reason);
+}
+
+sub client_ungline {
+	my ($self, $cid, $target) = @_;
+	my ($nick, $ident, $host) = registry_read('backend.db.handle')->int_client_hostmask($cid);
+	my ($tident, $thost)      = split(/\@/, $target);
+	$self->sendraw('TKL - G %s %s %s %s', $tident, $thost, sprintf('%s!%s@%s', $nick, $ident, $host));
+}
+
+sub client_ungzline {
+        my ($self, $cid, $target) = @_;
+        my ($nick, $ident, $host) = registry_read('backend.db.handle')->int_client_hostmask($cid);
+        $self->sendraw('TKL - Z %s %s %s%s', $target, sprintf('%s!%s@%s', $nick, $ident, $host));
+}
+
+sub sendraw {
+	my ($self, $data) = (shift, shift); # don't bust @_
+	my $socket        = registry_read('backend.irc.socket');
+	$data .= "\r\n";
+	$data  = sprintf($data, @_);
+	if (registry_read('backend.irc.TS6.link.usezip')) {
+		my ($deflate)           = registry_read('backend.irc.TS6.link.zip.deflate_handle');
+		my ($deflated, $status) = $deflate->deflate($data);
+		if ($status) {
+			debug('Failed to deflate outgoing data. Closing socket connection. ', 0);
+			debug($deflate->msg, 1);
+			$socket->close;
+			return;
+		}
+		$data = $deflated;
+	}
+	syswrite($socket, $data);
+	debug($data, 4);
+	registry_write('backend.irc.TS6.bytes.sent', registry_read('backend.irc.TS6.bytes.sent') + length($data));
+}
+
+sub readraw {
+	my ($self) = @_;
+	my $data;
+	my $socket = registry_read('backend.irc.socket');
+	if (registry_read('backend.irc.TS6.link.usezip')) {
+		my ($inflate)           = registry_read('backend.irc.TS6.link.zip.inflate_handle');
+		my ($inflated, $status) = $inflate->inflate($data);
+		if ($status) {
+			debug('Failed to inflate incoming data. Closing socket connection. ', 0);
+			debug($inflate->msg, 1);
+			$socket->close;
+			return;
+		}
+		$data = $inflated;
+	}
+	else {
+		$data = <$socket>;
+	}
+	registry_write('backend.irc.TS6.bytes.read', registry_read('backend.irc.TS6.bytes.read') + length($data));
+	$data =~ s/(\r|\n)//g;
+	return($data);
+}
+
+sub uid_to_nick {
+	my ($self, $uid) = @_;
+	return($self->{uid}{$uid});
+}
+sub nick_to_uid {
+	my ($self, $nick) = @_;
+	return($self->{nick}{$nick});
+}
+
+1;
+
