@@ -1,7 +1,6 @@
 #!/usr/bin/perl -w
 package backend::irc::TS6;
 use strict;
-use Azusa::MySQL;
 use CommonRoutines;
 
 use IO::Socket::INET;
