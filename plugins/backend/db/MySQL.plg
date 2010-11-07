@@ -31,7 +31,7 @@ sub initialize {
 	die('backend.db.MySQL.db_user is unset.')               if (!registry_read('backend.db.MySQL.db_user'));
 	die('backend.db.MySQL.db_name is unset.')               if (!registry_read('backend.db.MySQL.db_name'));
 
-	registry_read('core')->event_insert('MySQL_modeparse', 'mode', '.*', \&channel_mode);
+	registry_read('core')->event_insert(2, 'MySQL_modeparse', 'mode', '.*', \&channel_mode);
 }
 
 sub start {
@@ -767,6 +767,11 @@ sub user_vhost_set {
 	}
 	$self->sql_insertcache('users:uid='.$userid.':vhost', $vhost);
 	$sql->query('UPDATE users SET vhost = %s WHERE uid = %d', $vhost, $userid);
+}
+
+sub query {
+	my ($self, @query) = @_;
+	return(registry_read('backend.db.MySQL.db_handle')->query(@query));
 }
 
 # MySQL cache routines

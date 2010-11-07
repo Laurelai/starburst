@@ -191,7 +191,8 @@ sub do_match {
 	}
 	elsif ($matchon eq 'join') {
 		my ($nick, $target);
-		if ($buffer =~ /^:((?:\\s|[^\s])+?) JOIN ((?:\\s|[^\s])+?)$/i) {
+		# [Sun Nov  7 11:24:15 2010] matching on a join for :42XAAAAAL JOIN 1276472070 # + :: join .*
+		if ($buffer =~ /^:((?:\\s|[^\s])+?) JOIN \d+ ((?:\\s|[^\s])+?) .*?$/i) {
 			($nick, $target) = ($1, $2);
 			$nick   = $self->uid_to_nick($nick);
 			return(1, ($nick, $target)) if ($target =~ m/$regex/i);
