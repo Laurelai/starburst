@@ -266,7 +266,7 @@ sub proto_privmsg {
 sub proto_new_client {
 	my ($data) = @_;
 	my $self   = registry_read('backend.irc.handle');
-	$data      =~ /^NICK (.*?) \d \d+ (.*?) (.*?) .*? \d :(.*?)$/;
+	$data      =~ /^NICK (.*?) \d \d+ (.*?) (.*?) .*? \d+ :(.*?)$/;
 	my ($nick, $ident, $host, $realname) = ($1, $2, $3, $4);
 	debug('New user '.$nick.'!'.$ident.'@'.$host, 2);
 	registry_read('backend.db.handle')->client_new($nick, $ident, $host, $realname);
