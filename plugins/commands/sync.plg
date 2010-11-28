@@ -1,0 +1,62 @@
+#!/usr/bin/perl -w
+package command::sync;
+use strict;
+use CommonRoutines;
+
+BEGIN {
+	$__plugin_name    = 'Command: SYNC';
+	$__plugin_version = '1.0';
+	$__plugin_author  = 'ezbake consortium';
+	$__plugin_date    = 'under development';
+};
+
+$__plugin_handle  = command::sync->new();
+
+sub new {
+       	my $self = shift;
+       	$self = bless({}, $self);
+       	for (my $x = 0; $x < $#_; $x += 2) {
+               	$self->{$_[$x]} = $_[$x+1];
+       	}
+       	return($self);
+}
+
+sub initialize {
+	my ($self) = @_;
+	registry_read('core')->event_insert(2, 'CMD_sync',      'privmsg', '^\.sync', \&command_sync);
+}
+
+sub start { }
+
+sub shutdown {
+	undef(&new);
+	undef(&initialize);
+}
+
+sub command_sync {
+	my ($nick, $target, $message) = @_;
+	my $self          = registry_read('backend.irc.handle');
+	my $botnick       = registry_read('irc.nickname');
+	my $db            = registry_read('backend.db.handle');
+	my @buffer = split(/\s/, $message);
+	my $userid        = $db->user_nick_to_id($nick);
+	my $loggedin      = $db->user_logged_in($userid);
+	my $clientid      = $db->client_nick_to_id($nick);
+	my $cid           = $db->channel_name_to_id($target);
+	my $rcid          = $db->channel_reg_name_to_id($target);
+	return if (!$loggedin || !$cid || !$rcid);
+	if (!$db->channel_permissions($rcid, $userid, 'sync')) {
+		$self->client_notice(1, $nick, 'You have insufficient channel permissions to sync modes.');
+		return;
+	}
+	my (@acl_array) = $db->channel_permissions_all($rcid);
+	foreach my $acl (@acl_array) {
+		$acl->[0] = $db->user_name_to_nick($db->user_id_to_name($acl->[0]));
+		$self->client_mode(1, $target, '+o '.$acl->[0]) if ($acl->[1] eq 'op');
+		$self->client_mode(1, $target, '+v '.$acl->[0]) if ($acl->[1] eq 'voice');
+	}
+
+}
+
+1;
+
