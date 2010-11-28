@@ -250,9 +250,11 @@ sub proto_ping {
 sub proto_eos {
 	my ($data) = @_;
 	my $self   = registry_read('backend.irc.handle');
+	return if (registry_read('backend.irc.irc_sync')); # Only need to run join/sync once per link - see below
 	debug('IRCd sent synch', 1);
 	# registry_read('core')->join_registered_channels();
 	registry_read('backend.db.handle')->int_client_join_registered_channels(1);
+	registry_write('backend.irc.irc_sync', '1'); # Bugfix 13:15 28/11/10 - `Starburst sets itself +o 3x on sync' - reported by Laurelai
 }
 
 sub proto_privmsg {
