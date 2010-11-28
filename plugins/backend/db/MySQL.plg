@@ -31,22 +31,31 @@ sub initialize {
 	die('backend.db.MySQL.db_user is unset.')               if (!registry_read('backend.db.MySQL.db_user'));
 	die('backend.db.MySQL.db_name is unset.')               if (!registry_read('backend.db.MySQL.db_name'));
 
-	registry_read('core')->event_insert(2, 'MySQL_modeparse', 'mode', '.*', \&channel_mode);
-}
-
-sub start {
-	my ($self) = @_;
 	debug('Initializing MySQL DB Backend plugin...', 0);
 	my $sql    = Azusa::MySQL->new( db_host   => registry_read('backend.db.MySQL.db_host'),
 					db_user   => registry_read('backend.db.MySQL.db_user'),
 					db_pass   => registry_read('backend.db.MySQL.db_pass'),
 					db_name   => registry_read('backend.db.MySQL.db_name'),
-					verbosity => registry_read('verbosity'));
-	$sql->login;
+					verbosity => registry_read('verbosity'),
+					errors_fatal => 0);
+	my $herr = $sql->login;
+	if ($herr) { # failed to connect to sql for some reason
+		debug('Critical error: MySQL failed to connect: '.$herr, 0);
+		debug('We are going to wait for 10 seconds and try again.', 0);
+		$self->initialize;
+		debug('We successfully reconnected.', 0);
+		return();
+	}
 	registry_write('backend.db.MySQL.db_handle', $sql);
 	registry_write('backend.db.MySQL.cache.hit', 0);
-	registry_write('backend.db.MySQL.cache.miss', 0);
+	registry_write('backend.db.MySQL.cache.miss', 0);	
 
+	registry_read('core')->event_insert(2, 'MySQL_modeparse', 'mode', '.*', \&channel_mode);
+}
+
+sub start {
+	my ($self) = @_;
+	my $sql    = registry_read('backend.db.MySQL.db_handle');
 	# create tables if they don't exist already
 	my $table;
 	# internal_clients
@@ -183,7 +192,12 @@ EOF
 sub do_nothing { # Send a keepalive to the server.
 	my ($self) = @_;
 	my $sql    = registry_read('backend.db.MySQL.db_handle');
-	$sql->query('SELECT 1');
+	my $errstr = $sql->query('SELECT 1');
+	if ($sql->{mysql_err}) {
+		debug('Critical error in MySQL: '.$errstr, 0);
+		debug('Attempting to relogin in case of disconnect', 0);
+		$self->initialize;
+	}
 }
 
 sub shutdown {
