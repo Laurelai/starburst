@@ -610,12 +610,21 @@ sub client_rename {
 	my ($self, $oldnick, $newnick) = @_;
 	my $sql                        = registry_read('backend.db.MySQL.db_handle');
 	my $cid                        = $self->client_nick_to_id($oldnick);
+	my $uid                        = $self->user_nick_to_id($oldnick);
 	debug('client '.$cid.' (oldnick '.$oldnick.') changing nick to '.$newnick, 4);
 	$sql->query('UPDATE clients SET nick = %s WHERE cid = %d', $cid);
 	$self->sql_insertcache('clients:cid='.$cid.':nick', $newnick);
 	$self->sql_insertcache('clients:nick='.$newnick.':cid', $cid);
 	
 	$self->sql_deletecache('clients:nick='.$oldnick.':cid');
+
+	if ($uid) {
+		$sql->query('UPDATE users SET nick = %s WHERE uid = %d', $newnick, $uid);
+		$self->sql_insertcache('users:uid='.$uid.':nick', $newnick);
+		$self->sql_insertcache('users:nick='.$newnick.':uid', $uid);
+	
+		$self->sql_deletecache('users:nick='.$oldnick.':uid');
+	}
 }
 
 # User utilities. These return values.
